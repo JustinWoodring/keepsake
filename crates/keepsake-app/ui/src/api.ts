@@ -186,4 +186,13 @@ export const api = {
     path?: string;
   }): Promise<void> =>
     invoke("import_to_new_vault", params),
+  recoverFromSync: (params: {
+    serverUrl: string;
+    vaultId: string;
+    syncPassphrase: string;
+    username: string;
+    password: string;
+    path?: string;
+  }): Promise<void> =>
+    invoke("recover_from_sync", params),
 };

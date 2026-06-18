@@ -39,6 +39,12 @@ function Unlock() {
   const [importBytes, setImportBytes] = createSignal<string>("");
   const [importError, setImportError] = createSignal<string | null>(null);
 
+  // Recovery flow (recover from a sync server, no .ksk).
+  const [recovering, setRecovering] = createSignal(false);
+  const [recoverServerUrl, setRecoverServerUrl] = createSignal("");
+  const [recoverVaultId, setRecoverVaultId] = createSignal("");
+  const [recoverPassphrase, setRecoverPassphrase] = createSignal("");
+
   // Reactive on the live users signal — no need for a separate
   // local signal that can drift out of sync.
   const hasVault = () => state.users().length > 0;
@@ -131,6 +137,61 @@ function Unlock() {
     }
   }
 
+  async function doRecover(e: Event) {
+    e.preventDefault();
+    if (!recoverServerUrl().trim()) {
+      setImportError("Server URL is required");
+      return;
+    }
+    if (!recoverVaultId().trim()) {
+      setImportError("Vault id is required");
+      return;
+    }
+    if (!recoverPassphrase()) {
+      setImportError("Sync passphrase is required");
+      return;
+    }
+    if (!username().trim()) {
+      setImportError("Pick a username for the new local account");
+      return;
+    }
+    if (!password()) {
+      setImportError("Pick a password for the new local account");
+      return;
+    }
+    setRecovering(true);
+    setImportError(null);
+    try {
+      await api.recoverFromSync({
+        serverUrl: recoverServerUrl().trim(),
+        vaultId: recoverVaultId().trim(),
+        syncPassphrase: recoverPassphrase(),
+        username: username(),
+        password: password(),
+      });
+      // Save the URL and vault id to the persisted signals
+      // so the Sync page picks them up after we land in
+      // the shell.
+      state.setSyncUrl(recoverServerUrl().trim());
+      state.setSyncVaultId(recoverVaultId().trim());
+      await refreshStatus();
+      // Pull right away so the user sees records
+      // immediately rather than waiting for the auto-sync
+      // cycle.
+      try {
+        const n = await api.syncPull(recoverServerUrl().trim(), recoverVaultId().trim());
+        showToast("ok", `Recovered ${n} record(s) from sync`);
+      } catch (e) {
+        showToast("err", `recovered, but initial pull failed: ${String(e)}`);
+      }
+      setRecoverPassphrase("");
+    } catch (err) {
+      setImportError(String(err));
+    } finally {
+      setRecovering(false);
+    }
+  }
+
   return (
     <div class="unlock-shell">
       <div class="unlock-card">
@@ -185,8 +246,9 @@ function Unlock() {
               onClick={() => {
                 document.getElementById("unlock-init-form")?.classList.toggle("hidden");
                 document.getElementById("unlock-import-form")?.classList.add("hidden");
+                document.getElementById("unlock-recover-form")?.classList.add("hidden");
               }}
-              disabled={importing()}
+              disabled={importing() || recovering()}
             >
               + Create new vault
             </button>
@@ -226,8 +288,9 @@ function Unlock() {
               onClick={() => {
                 document.getElementById("unlock-import-form")?.classList.toggle("hidden");
                 document.getElementById("unlock-init-form")?.classList.add("hidden");
+                document.getElementById("unlock-recover-form")?.classList.add("hidden");
               }}
-              disabled={importing()}
+              disabled={importing() || recovering()}
             >
               ⤓ Import .ksk bundle
             </button>
@@ -246,7 +309,7 @@ function Unlock() {
                     type="button"
                     class="btn"
                     onClick={pickFile}
-                    disabled={importing()}
+                    disabled={importing() || recovering()}
                   >
                     Choose…
                   </button>
@@ -266,8 +329,88 @@ function Unlock() {
                 <div class="form-error">{importError()}</div>
               </Show>
               <div class="unlock-actions">
-                <button type="submit" class="btn btn-primary btn-block" disabled={importing()}>
+                <button type="submit" class="btn btn-primary btn-block" disabled={importing() || recovering()}>
                   {importing() ? "Importing…" : "Import bundle"}
+                </button>
+              </div>
+            </form>
+
+            <div class="unlock-divider"><span>or</span></div>
+
+            <button
+              type="button"
+              class="btn btn-block btn-lg"
+              onClick={() => {
+                document.getElementById("unlock-recover-form")?.classList.toggle("hidden");
+                document.getElementById("unlock-init-form")?.classList.add("hidden");
+                document.getElementById("unlock-import-form")?.classList.add("hidden");
+              }}
+              disabled={importing() || recovering()}
+            >
+              ⇄ Recover from sync
+            </button>
+
+            <form id="unlock-recover-form" class="unlock-init-form hidden" onSubmit={doRecover}>
+              <div class="unlock-field">
+                <label>server URL</label>
+                <input
+                  type="url"
+                  placeholder="https://sync.example.com"
+                  value={recoverServerUrl()}
+                  onInput={(e) => setRecoverServerUrl(e.currentTarget.value)}
+                  required
+                />
+              </div>
+              <div class="unlock-field">
+                <label>vault id</label>
+                <input
+                  type="text"
+                  placeholder="family"
+                  value={recoverVaultId()}
+                  onInput={(e) => setRecoverVaultId(e.currentTarget.value)}
+                  required
+                />
+              </div>
+              <div class="unlock-field">
+                <label>sync passphrase</label>
+                <input
+                  type="password"
+                  autocomplete="current-password"
+                  value={recoverPassphrase()}
+                  onInput={(e) => setRecoverPassphrase(e.currentTarget.value)}
+                  required
+                />
+              </div>
+              <div class="unlock-divider"><span>local account on this device</span></div>
+              <div class="unlock-field">
+                <label>username</label>
+                <input
+                  autocomplete="username"
+                  value={username()}
+                  onInput={(e) => setUsername(e.currentTarget.value)}
+                  required
+                />
+              </div>
+              <div class="unlock-field">
+                <label>password</label>
+                <input
+                  type="password"
+                  autocomplete="new-password"
+                  value={password()}
+                  onInput={(e) => setPassword(e.currentTarget.value)}
+                  required
+                />
+              </div>
+              <Show when={importError()}>
+                <div class="form-error">{importError()}</div>
+              </Show>
+              <div class="unlock-actions">
+                <button
+                  type="submit"
+                  class="btn btn-primary btn-block"
+                  disabled={recovering() || importing()}
+                >
+                  {recovering() ? "Recovering…" : "Recover from sync"}
                 </button>
               </div>
             </form>

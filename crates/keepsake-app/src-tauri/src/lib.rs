@@ -425,6 +425,52 @@ async fn import_to_new_vault(
     Ok(())
 }
 
+/// Recover a vault on a new device from a sync server.
+/// Creates a fresh vault with the user's username +
+/// password, seals the shared sync setup into it, and
+/// returns an unlocked session.  The auto-sync loop is
+/// also started so the next pull happens in the
+/// background.  The caller is expected to do a manual
+/// pull immediately after to populate the local vault.
+#[tauri::command]
+async fn recover_from_sync(
+    state: State<'_, AppState>,
+    path: Option<String>,
+    server_url: String,
+    vault_id: String,
+    sync_passphrase: String,
+    username: String,
+    password: String,
+) -> Result<(), String> {
+    let p = path
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(default_vault_path);
+    {
+        let mut guard = state.session.lock();
+        if guard.is_some() {
+            return Err("vault is already unlocked".into());
+        }
+        let session = session::recover_from_sync(
+            &p,
+            &server_url,
+            &vault_id,
+            &sync_passphrase,
+            &username,
+            &password,
+        )
+        .map_err(|e| e.to_string())?;
+        *guard = Some(session);
+    }
+    // Start the auto-sync loop, just like `unlock` does.
+    if let Some(prev) = state.auto_sync.lock().take() {
+        prev.stop();
+    }
+    let snapshot = state.clone_state();
+    let handle = auto_sync::spawn(snapshot);
+    *state.auto_sync.lock() = Some(handle);
+    Ok(())
+}
+
 /// Returns the default vault path for the current OS.
 #[tauri::command]
 async fn default_path() -> Result<String, String> {
@@ -452,6 +498,7 @@ pub fn run() {
             export_bundle,
             import_bundle,
             import_to_new_vault,
+            recover_from_sync,
             add_record,
             update_record,
             delete_record,

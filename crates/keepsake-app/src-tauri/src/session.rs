@@ -513,6 +513,83 @@ pub fn import_to_new_vault(
     )?)
 }
 
+/// Recover a vault on a new device from a sync server.
+/// Creates a fresh, empty local vault with the user's
+/// username + password, seals the shared sync setup
+/// (server_url, vault_id, sync_passphrase) into it, and
+/// returns an unlocked Session ready to pull from the
+/// server.  Used by the Unlock screen's "Recover from
+/// sync" flow.
+pub fn recover_from_sync(
+    path: &std::path::Path,
+    server_url: &str,
+    vault_id: &str,
+    sync_passphrase: &str,
+    username: &str,
+    password: &str,
+) -> Result<keepsake_core::session::Session> {
+    if path.exists() {
+        return Err(keepsake_core::Error::AlreadyExists(
+            path.display().to_string(),
+        ));
+    }
+    use keepsake_core::crypto::KdfParams;
+    use keepsake_core::identity::{password_to_master_key, seal_vault_key, EnvelopeKey, VaultKey};
+    use rand::RngCore;
+
+    // Generate a fresh random vault key — same as a normal
+    // init.  The shared sync key is derived independently
+    // from the sync passphrase + vault_id; the vault key
+    // and the shared sync key are different keys that
+    // protect different things.
+    let mut k = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut k);
+    let vault_key = VaultKey::from_bytes(k);
+    let params = KdfParams::default();
+    let (master, salt) = password_to_master_key(password.as_bytes(), params)?;
+    let sealed = seal_vault_key(&master, &vault_key)?;
+    let envelope = EnvelopeKey::from_master_key(&master)?;
+
+    // Create the vault file and write the sealed-keys row.
+    let vault = keepsake_core::vault::Vault::open_or_create(path)?;
+    let row = keepsake_core::vault::SealedKeyRow {
+        username: username.to_string(),
+        device_id: random_device_id(),
+        kdf_salt: salt.0,
+        kdf_params: params.encode(),
+        seal_nonce: sealed.nonce,
+        seal_ciphertext: sealed.ciphertext,
+        envelope_pk: envelope.public_key().to_bytes(),
+        created_at: chrono::Utc::now(),
+    };
+    vault.put_sealed_key(&row)?;
+    drop(vault);
+
+    // Reopen, unlock with the vault key, write the shared
+    // sync setup, append an audit entry.
+    let mut vault = keepsake_core::vault::Vault::open_or_create(path)?;
+    vault.unlock(&vault_key)?;
+    vault.set_shared_sync(vault_id, sync_passphrase, Some(server_url))?;
+    vault.append_audit(
+        AuditOp::AddUser,
+        username,
+        Some(&username),
+        Some("vault recovered from sync"),
+    )?;
+    vault.append_audit(
+        AuditOp::Unlock,
+        username,
+        None,
+        None,
+    )?;
+    Ok(keepsake_core::session::Session::new(
+        path.to_path_buf(),
+        vault,
+        master,
+        username.to_string(),
+    )?)
+}
+
 /// Add a new user to this device's vault.  The vault key is
 /// sealed under the new user's master key.  Requires the
 /// vault to be unlocked (so we can re-derive the vault key
@@ -930,5 +1007,76 @@ mod tests {
         } else {
             Ok(masked_value(&rec))
         }
+    }
+
+    #[test]
+    fn recover_from_sync_creates_vault_with_shared_setup() {
+        // Simulate a recovery: fresh device, knows the
+        // server URL, vault id, and sync passphrase.  No
+        // existing vault file.  recover_from_sync should
+        // create the vault, install the shared setup, and
+        // leave the session unlocked with the shared key
+        // in memory.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("recovered.db");
+        let session = recover_from_sync(
+            &path,
+            "https://sync.example.com",
+            "family",
+            "shared-pass-1",
+            "bob",
+            "swordfish",
+        )
+        .unwrap();
+
+        assert_eq!(session.username, "bob");
+        assert!(session.vault.is_unlocked());
+        // The shared setup is stored in the vault.
+        let setup = session.vault.get_shared_sync("family").unwrap().unwrap();
+        assert_eq!(setup.passphrase, "shared-pass-1");
+        assert_eq!(setup.server_url.as_deref(), Some("https://sync.example.com"));
+        // The shared key is in the session's in-memory cache.
+        let shared_key = session.shared_sync_key("family").unwrap();
+        // The same key would be re-derived independently
+        // from the same passphrase + vault_id.
+        let rederived = keepsake_core::sync::client::derive_shared_key(
+            b"shared-pass-1",
+            "family",
+        ).unwrap();
+        assert_eq!(shared_key.as_bytes(), rederived.as_bytes());
+
+        // The vault file was actually created on disk.
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn recover_from_sync_fails_if_vault_exists() {
+        // The vault file is created on disk by init/recover,
+        // so a second call must fail with AlreadyExists.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("recovered.db");
+        recover_from_sync(
+            &path,
+            "https://sync.example.com",
+            "family",
+            "shared-pass",
+            "bob",
+            "swordfish",
+        )
+        .unwrap();
+        let err = recover_from_sync(
+            &path,
+            "https://sync.example.com",
+            "family",
+            "shared-pass",
+            "bob",
+            "swordfish",
+        )
+        .err()
+        .expect("second recover should fail");
+        assert!(
+            matches!(err, keepsake_core::Error::AlreadyExists(_)),
+            "got: {err:?}"
+        );
     }
 }

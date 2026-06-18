@@ -2524,7 +2524,8 @@ const api = {
   setAutoSync: (enabled) => invoke("set_auto_sync", { enabled }),
   exportBundle: (passphrase) => invoke("export_bundle", { passphrase }),
   importBundle: (bytes, passphrase) => invoke("import_bundle", { bytes, passphrase }),
-  importToNewVault: (params) => invoke("import_to_new_vault", params)
+  importToNewVault: (params) => invoke("import_to_new_vault", params),
+  recoverFromSync: (params) => invoke("recover_from_sync", params)
 };
 const [status, setStatus] = createSignal({
   unlocked: false,
@@ -2885,7 +2886,7 @@ function installLinkClickHandler(navigate) {
     navigateFn?.(path);
   });
 }
-var _tmpl$$9 = /* @__PURE__ */ template(`<div class=app>`), _tmpl$2$8 = /* @__PURE__ */ template(`<form class=unlock-form><div class=unlock-field><label>username</label><input autocomplete=username required autofocus></div><div class=unlock-field><label>password</label><input type=password autocomplete=current-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary unlock-flex">`), _tmpl$3$8 = /* @__PURE__ */ template(`<div class=form-error>`), _tmpl$4$8 = /* @__PURE__ */ template(`<div class=unlock-form><button type=button class="btn btn-primary btn-block btn-lg">+ Create new vault</button><form id=unlock-init-form class="unlock-init-form hidden"><div class=unlock-field><label>username</label><input autocomplete=username required></div><div class=unlock-field><label>password</label><input type=password autocomplete=new-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary btn-block"></button></div></form><div class=unlock-divider><span>or</span></div><button type=button class="btn btn-block btn-lg">⤓ Import .ksk bundle</button><form id=unlock-import-form class="unlock-init-form hidden"><div class=unlock-field><label>bundle file</label><div class=row><input type=text placeholder="No file selected"readonly><button type=button class=btn>Choose…</button></div></div><div class=unlock-field><label>export passphrase</label><input type=password autocomplete=current-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary btn-block">`), _tmpl$5$8 = /* @__PURE__ */ template(`<div><span class=muted-small>users on this device:</span> `), _tmpl$6$6 = /* @__PURE__ */ template(`<div class=unlock-shell><div class=unlock-card><div class=unlock-brand><div class=unlock-mark>K</div><span class=unlock-name>Keepsake</span></div><h1 class=unlock-title></h1><p class=unlock-sub></p><div class=unlock-meta><div><span class=muted-small>vault:</span> <code>`), _tmpl$7$6 = /* @__PURE__ */ template(`<code>`), _tmpl$8$5 = /* @__PURE__ */ template(`<div class=shell><main>`), _tmpl$9$3 = /* @__PURE__ */ template(`<aside class=sidebar><div class=sidebar-brand><div class=sidebar-mark>K</div><div class=sidebar-brand-text><span class=sidebar-brand-name>Keepsake</span><span class=sidebar-brand-user></span></div></div><nav class=sidebar-nav></nav><div class=sidebar-scroll><div class=sidebar-section>System</div><nav></nav></div><div class=sidebar-footer><button class="btn btn-ghost"title="Lock vault">🔒 Lock`), _tmpl$0$3 = /* @__PURE__ */ template(`<div class=sidebar-group><div class=sidebar-section></div><nav>`), _tmpl$1$2 = /* @__PURE__ */ template(`<span class=ic>`), _tmpl$10$2 = /* @__PURE__ */ template(`<span class=lbl>`), _tmpl$11$1 = /* @__PURE__ */ template(`<span class=sidebar-badge>`);
+var _tmpl$$9 = /* @__PURE__ */ template(`<div class=app>`), _tmpl$2$8 = /* @__PURE__ */ template(`<form class=unlock-form><div class=unlock-field><label>username</label><input autocomplete=username required autofocus></div><div class=unlock-field><label>password</label><input type=password autocomplete=current-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary unlock-flex">`), _tmpl$3$8 = /* @__PURE__ */ template(`<div class=form-error>`), _tmpl$4$8 = /* @__PURE__ */ template(`<div class=unlock-form><button type=button class="btn btn-primary btn-block btn-lg">+ Create new vault</button><form id=unlock-init-form class="unlock-init-form hidden"><div class=unlock-field><label>username</label><input autocomplete=username required></div><div class=unlock-field><label>password</label><input type=password autocomplete=new-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary btn-block"></button></div></form><div class=unlock-divider><span>or</span></div><button type=button class="btn btn-block btn-lg">⤓ Import .ksk bundle</button><form id=unlock-import-form class="unlock-init-form hidden"><div class=unlock-field><label>bundle file</label><div class=row><input type=text placeholder="No file selected"readonly><button type=button class=btn>Choose…</button></div></div><div class=unlock-field><label>export passphrase</label><input type=password autocomplete=current-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary btn-block"></button></div></form><div class=unlock-divider><span>or</span></div><button type=button class="btn btn-block btn-lg">⇄ Recover from sync</button><form id=unlock-recover-form class="unlock-init-form hidden"><div class=unlock-field><label>server URL</label><input type=url placeholder=https://sync.example.com required></div><div class=unlock-field><label>vault id</label><input type=text placeholder=family required></div><div class=unlock-field><label>sync passphrase</label><input type=password autocomplete=current-password required></div><div class=unlock-divider><span>local account on this device</span></div><div class=unlock-field><label>username</label><input autocomplete=username required></div><div class=unlock-field><label>password</label><input type=password autocomplete=new-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary btn-block">`), _tmpl$5$8 = /* @__PURE__ */ template(`<div><span class=muted-small>users on this device:</span> `), _tmpl$6$6 = /* @__PURE__ */ template(`<div class=unlock-shell><div class=unlock-card><div class=unlock-brand><div class=unlock-mark>K</div><span class=unlock-name>Keepsake</span></div><h1 class=unlock-title></h1><p class=unlock-sub></p><div class=unlock-meta><div><span class=muted-small>vault:</span> <code>`), _tmpl$7$6 = /* @__PURE__ */ template(`<code>`), _tmpl$8$5 = /* @__PURE__ */ template(`<div class=shell><main>`), _tmpl$9$3 = /* @__PURE__ */ template(`<aside class=sidebar><div class=sidebar-brand><div class=sidebar-mark>K</div><div class=sidebar-brand-text><span class=sidebar-brand-name>Keepsake</span><span class=sidebar-brand-user></span></div></div><nav class=sidebar-nav></nav><div class=sidebar-scroll><div class=sidebar-section>System</div><nav></nav></div><div class=sidebar-footer><button class="btn btn-ghost"title="Lock vault">🔒 Lock`), _tmpl$0$3 = /* @__PURE__ */ template(`<div class=sidebar-group><div class=sidebar-section></div><nav>`), _tmpl$1$2 = /* @__PURE__ */ template(`<span class=ic>`), _tmpl$10$2 = /* @__PURE__ */ template(`<span class=lbl>`), _tmpl$11$1 = /* @__PURE__ */ template(`<span class=sidebar-badge>`);
 function App(props) {
   const navigate = useNavigate();
   onMount(async () => {
@@ -2934,6 +2935,10 @@ function Unlock() {
   const [importPass, setImportPass] = createSignal("");
   const [importBytes, setImportBytes] = createSignal("");
   const [importError, setImportError] = createSignal(null);
+  const [recovering, setRecovering] = createSignal(false);
+  const [recoverServerUrl, setRecoverServerUrl] = createSignal("");
+  const [recoverVaultId, setRecoverVaultId] = createSignal("");
+  const [recoverPassphrase, setRecoverPassphrase] = createSignal("");
   const hasVault = () => state.users().length > 0;
   onMount(() => {
     void refreshUsers();
@@ -2964,7 +2969,7 @@ function Unlock() {
       } = await __vitePreload(async () => {
         const {
           open: open2
-        } = await import("./index-CQeWrNsp.js");
+        } = await import("./index-DuDVuQC0.js");
         return {
           open: open2
         };
@@ -2982,7 +2987,7 @@ function Unlock() {
       } = await __vitePreload(async () => {
         const {
           readTextFile: readTextFile2
-        } = await import("./index-D8BJD759.js");
+        } = await import("./index-X0YsrTfK.js");
         return {
           readTextFile: readTextFile2
         };
@@ -3038,8 +3043,56 @@ function Unlock() {
       setImporting(false);
     }
   }
+  async function doRecover(e) {
+    e.preventDefault();
+    if (!recoverServerUrl().trim()) {
+      setImportError("Server URL is required");
+      return;
+    }
+    if (!recoverVaultId().trim()) {
+      setImportError("Vault id is required");
+      return;
+    }
+    if (!recoverPassphrase()) {
+      setImportError("Sync passphrase is required");
+      return;
+    }
+    if (!username().trim()) {
+      setImportError("Pick a username for the new local account");
+      return;
+    }
+    if (!password()) {
+      setImportError("Pick a password for the new local account");
+      return;
+    }
+    setRecovering(true);
+    setImportError(null);
+    try {
+      await api.recoverFromSync({
+        serverUrl: recoverServerUrl().trim(),
+        vaultId: recoverVaultId().trim(),
+        syncPassphrase: recoverPassphrase(),
+        username: username(),
+        password: password()
+      });
+      state.setSyncUrl(recoverServerUrl().trim());
+      state.setSyncVaultId(recoverVaultId().trim());
+      await refreshStatus();
+      try {
+        const n = await api.syncPull(recoverServerUrl().trim(), recoverVaultId().trim());
+        showToast("ok", `Recovered ${n} record(s) from sync`);
+      } catch (e2) {
+        showToast("err", `recovered, but initial pull failed: ${String(e2)}`);
+      }
+      setRecoverPassphrase("");
+    } catch (err) {
+      setImportError(String(err));
+    } finally {
+      setRecovering(false);
+    }
+  }
   return (() => {
-    var _el$2 = _tmpl$6$6(), _el$3 = _el$2.firstChild, _el$4 = _el$3.firstChild, _el$5 = _el$4.nextSibling, _el$6 = _el$5.nextSibling, _el$39 = _el$6.nextSibling, _el$43 = _el$39.firstChild, _el$44 = _el$43.firstChild, _el$45 = _el$44.nextSibling, _el$46 = _el$45.nextSibling;
+    var _el$2 = _tmpl$6$6(), _el$3 = _el$2.firstChild, _el$4 = _el$3.firstChild, _el$5 = _el$4.nextSibling, _el$6 = _el$5.nextSibling, _el$61 = _el$6.nextSibling, _el$65 = _el$61.firstChild, _el$66 = _el$65.firstChild, _el$67 = _el$66.nextSibling, _el$68 = _el$67.nextSibling;
     insert(_el$5, (() => {
       var _c$ = memo(() => !!hasVault());
       return () => _c$() ? "Unlock your vault" : importing() ? "Importing…" : "Set up your vault";
@@ -3060,16 +3113,17 @@ function Unlock() {
         createRenderEffect(() => _el$11.value = password());
         return _el$7;
       }
-    }), _el$39);
+    }), _el$61);
     insert(_el$3, createComponent(Show, {
       get when() {
         return !hasVault();
       },
       get children() {
-        var _el$14 = _tmpl$4$8(), _el$15 = _el$14.firstChild, _el$16 = _el$15.nextSibling, _el$17 = _el$16.firstChild, _el$18 = _el$17.firstChild, _el$19 = _el$18.nextSibling, _el$20 = _el$17.nextSibling, _el$21 = _el$20.firstChild, _el$22 = _el$21.nextSibling, _el$23 = _el$20.nextSibling, _el$24 = _el$23.firstChild, _el$25 = _el$16.nextSibling, _el$26 = _el$25.nextSibling, _el$27 = _el$26.nextSibling, _el$28 = _el$27.firstChild, _el$29 = _el$28.firstChild, _el$30 = _el$29.nextSibling, _el$31 = _el$30.firstChild, _el$32 = _el$31.nextSibling, _el$33 = _el$28.nextSibling, _el$34 = _el$33.firstChild, _el$35 = _el$34.nextSibling, _el$37 = _el$33.nextSibling, _el$38 = _el$37.firstChild;
+        var _el$14 = _tmpl$4$8(), _el$15 = _el$14.firstChild, _el$16 = _el$15.nextSibling, _el$17 = _el$16.firstChild, _el$18 = _el$17.firstChild, _el$19 = _el$18.nextSibling, _el$20 = _el$17.nextSibling, _el$21 = _el$20.firstChild, _el$22 = _el$21.nextSibling, _el$23 = _el$20.nextSibling, _el$24 = _el$23.firstChild, _el$25 = _el$16.nextSibling, _el$26 = _el$25.nextSibling, _el$27 = _el$26.nextSibling, _el$28 = _el$27.firstChild, _el$29 = _el$28.firstChild, _el$30 = _el$29.nextSibling, _el$31 = _el$30.firstChild, _el$32 = _el$31.nextSibling, _el$33 = _el$28.nextSibling, _el$34 = _el$33.firstChild, _el$35 = _el$34.nextSibling, _el$37 = _el$33.nextSibling, _el$38 = _el$37.firstChild, _el$39 = _el$27.nextSibling, _el$40 = _el$39.nextSibling, _el$41 = _el$40.nextSibling, _el$42 = _el$41.firstChild, _el$43 = _el$42.firstChild, _el$44 = _el$43.nextSibling, _el$45 = _el$42.nextSibling, _el$46 = _el$45.firstChild, _el$47 = _el$46.nextSibling, _el$48 = _el$45.nextSibling, _el$49 = _el$48.firstChild, _el$50 = _el$49.nextSibling, _el$51 = _el$48.nextSibling, _el$52 = _el$51.nextSibling, _el$53 = _el$52.firstChild, _el$54 = _el$53.nextSibling, _el$55 = _el$52.nextSibling, _el$56 = _el$55.firstChild, _el$57 = _el$56.nextSibling, _el$59 = _el$55.nextSibling, _el$60 = _el$59.firstChild;
         _el$15.$$click = () => {
           document.getElementById("unlock-init-form")?.classList.toggle("hidden");
           document.getElementById("unlock-import-form")?.classList.add("hidden");
+          document.getElementById("unlock-recover-form")?.classList.add("hidden");
         };
         _el$16.addEventListener("submit", submit);
         _el$19.$$input = (e) => setUsername(e.currentTarget.value);
@@ -3078,6 +3132,7 @@ function Unlock() {
         _el$26.$$click = () => {
           document.getElementById("unlock-import-form")?.classList.toggle("hidden");
           document.getElementById("unlock-init-form")?.classList.add("hidden");
+          document.getElementById("unlock-recover-form")?.classList.add("hidden");
         };
         _el$27.addEventListener("submit", doImport);
         _el$32.$$click = pickFile;
@@ -3093,53 +3148,84 @@ function Unlock() {
           }
         }), _el$37);
         insert(_el$38, () => importing() ? "Importing…" : "Import bundle");
+        _el$40.$$click = () => {
+          document.getElementById("unlock-recover-form")?.classList.toggle("hidden");
+          document.getElementById("unlock-init-form")?.classList.add("hidden");
+          document.getElementById("unlock-import-form")?.classList.add("hidden");
+        };
+        _el$41.addEventListener("submit", doRecover);
+        _el$44.$$input = (e) => setRecoverServerUrl(e.currentTarget.value);
+        _el$47.$$input = (e) => setRecoverVaultId(e.currentTarget.value);
+        _el$50.$$input = (e) => setRecoverPassphrase(e.currentTarget.value);
+        _el$54.$$input = (e) => setUsername(e.currentTarget.value);
+        _el$57.$$input = (e) => setPassword(e.currentTarget.value);
+        insert(_el$41, createComponent(Show, {
+          get when() {
+            return importError();
+          },
+          get children() {
+            var _el$58 = _tmpl$3$8();
+            insert(_el$58, importError);
+            return _el$58;
+          }
+        }), _el$59);
+        insert(_el$60, () => recovering() ? "Recovering…" : "Recover from sync");
         createRenderEffect((_p$) => {
-          var _v$ = importing(), _v$2 = busy(), _v$3 = importing(), _v$4 = importing(), _v$5 = importing();
+          var _v$ = importing() || recovering(), _v$2 = busy(), _v$3 = importing() || recovering(), _v$4 = importing() || recovering(), _v$5 = importing() || recovering(), _v$6 = importing() || recovering(), _v$7 = recovering() || importing();
           _v$ !== _p$.e && (_el$15.disabled = _p$.e = _v$);
           _v$2 !== _p$.t && (_el$24.disabled = _p$.t = _v$2);
           _v$3 !== _p$.a && (_el$26.disabled = _p$.a = _v$3);
           _v$4 !== _p$.o && (_el$32.disabled = _p$.o = _v$4);
           _v$5 !== _p$.i && (_el$38.disabled = _p$.i = _v$5);
+          _v$6 !== _p$.n && (_el$40.disabled = _p$.n = _v$6);
+          _v$7 !== _p$.s && (_el$60.disabled = _p$.s = _v$7);
           return _p$;
         }, {
           e: void 0,
           t: void 0,
           a: void 0,
           o: void 0,
-          i: void 0
+          i: void 0,
+          n: void 0,
+          s: void 0
         });
         createRenderEffect(() => _el$19.value = username());
         createRenderEffect(() => _el$22.value = password());
         createRenderEffect(() => _el$31.value = importBytes() ? "(loaded)" : "");
         createRenderEffect(() => _el$35.value = importPass());
+        createRenderEffect(() => _el$44.value = recoverServerUrl());
+        createRenderEffect(() => _el$47.value = recoverVaultId());
+        createRenderEffect(() => _el$50.value = recoverPassphrase());
+        createRenderEffect(() => _el$54.value = username());
+        createRenderEffect(() => _el$57.value = password());
         return _el$14;
       }
-    }), _el$39);
-    insert(_el$39, createComponent(Show, {
+    }), _el$61);
+    insert(_el$61, createComponent(Show, {
       get when() {
         return memo(() => !!hasVault())() && state.users().length > 0;
       },
       get children() {
-        var _el$40 = _tmpl$5$8(), _el$41 = _el$40.firstChild;
-        _el$41.nextSibling;
-        insert(_el$40, () => state.users().map((u, i) => [i > 0 ? ", " : "", (() => {
-          var _el$47 = _tmpl$7$6();
-          insert(_el$47, u);
-          return _el$47;
+        var _el$62 = _tmpl$5$8(), _el$63 = _el$62.firstChild;
+        _el$63.nextSibling;
+        insert(_el$62, () => state.users().map((u, i) => [i > 0 ? ", " : "", (() => {
+          var _el$69 = _tmpl$7$6();
+          insert(_el$69, u);
+          return _el$69;
         })()]), null);
-        return _el$40;
+        return _el$62;
       }
-    }), _el$43);
-    insert(_el$46, () => state.vaultPath() || "—");
+    }), _el$65);
+    insert(_el$68, () => state.vaultPath() || "—");
     return _el$2;
   })();
 }
 function Shell(props) {
   return (() => {
-    var _el$48 = _tmpl$8$5(), _el$49 = _el$48.firstChild;
-    insert(_el$48, createComponent(Sidebar, {}), _el$49);
-    insert(_el$49, () => props.children);
-    return _el$48;
+    var _el$70 = _tmpl$8$5(), _el$71 = _el$70.firstChild;
+    insert(_el$70, createComponent(Sidebar, {}), _el$71);
+    insert(_el$71, () => props.children);
+    return _el$70;
   })();
 }
 function Sidebar() {
@@ -3166,18 +3252,18 @@ function Sidebar() {
     types: RECORD_TYPES.filter((t) => t.group === "Notes & Logs")
   }];
   return (() => {
-    var _el$50 = _tmpl$9$3(), _el$51 = _el$50.firstChild, _el$52 = _el$51.firstChild, _el$53 = _el$52.nextSibling, _el$54 = _el$53.firstChild, _el$55 = _el$54.nextSibling, _el$56 = _el$51.nextSibling, _el$57 = _el$56.nextSibling, _el$58 = _el$57.firstChild, _el$59 = _el$58.nextSibling, _el$60 = _el$57.nextSibling, _el$61 = _el$60.firstChild;
-    insert(_el$55, () => state.status().username ?? "—");
-    insert(_el$56, createComponent(SidebarLink, {
+    var _el$72 = _tmpl$9$3(), _el$73 = _el$72.firstChild, _el$74 = _el$73.firstChild, _el$75 = _el$74.nextSibling, _el$76 = _el$75.firstChild, _el$77 = _el$76.nextSibling, _el$78 = _el$73.nextSibling, _el$79 = _el$78.nextSibling, _el$80 = _el$79.firstChild, _el$81 = _el$80.nextSibling, _el$82 = _el$79.nextSibling, _el$83 = _el$82.firstChild;
+    insert(_el$77, () => state.status().username ?? "—");
+    insert(_el$78, createComponent(SidebarLink, {
       href: "/",
       icon: "◐",
       label: "Dashboard",
       end: true
     }));
-    insert(_el$57, () => groups.map((g2) => (() => {
-      var _el$62 = _tmpl$0$3(), _el$63 = _el$62.firstChild, _el$64 = _el$63.nextSibling;
-      insert(_el$63, () => g2.name);
-      insert(_el$64, () => g2.types.map((t) => createComponent(SidebarLink, {
+    insert(_el$79, () => groups.map((g2) => (() => {
+      var _el$84 = _tmpl$0$3(), _el$85 = _el$84.firstChild, _el$86 = _el$85.nextSibling;
+      insert(_el$85, () => g2.name);
+      insert(_el$86, () => g2.types.map((t) => createComponent(SidebarLink, {
         get href() {
           return `/c/${t.type}`;
         },
@@ -3188,31 +3274,31 @@ function Sidebar() {
           return t.label;
         }
       })));
-      return _el$62;
-    })()), _el$58);
-    insert(_el$59, createComponent(SidebarLinkWithBadge, {
+      return _el$84;
+    })()), _el$80);
+    insert(_el$81, createComponent(SidebarLinkWithBadge, {
       href: "/insights",
       icon: "📈",
       label: "Insights"
     }), null);
-    insert(_el$59, createComponent(SidebarLink, {
+    insert(_el$81, createComponent(SidebarLink, {
       href: "/sync",
       icon: "⇄",
       label: "Sync"
     }), null);
-    insert(_el$59, createComponent(SidebarLink, {
+    insert(_el$81, createComponent(SidebarLink, {
       href: "/audit",
       icon: "🛡",
       label: "Audit"
     }), null);
-    insert(_el$59, createComponent(SidebarLink, {
+    insert(_el$81, createComponent(SidebarLink, {
       href: "/settings",
       icon: "⚙",
       label: "Settings"
     }), null);
-    _el$61.$$click = lockNow;
-    createRenderEffect(() => setAttribute(_el$55, "title", state.status().username ?? ""));
-    return _el$50;
+    _el$83.$$click = lockNow;
+    createRenderEffect(() => setAttribute(_el$77, "title", state.status().username ?? ""));
+    return _el$72;
   })();
 }
 function SidebarLink(props) {
@@ -3226,13 +3312,13 @@ function SidebarLink(props) {
     activeClass: "active",
     get children() {
       return [(() => {
-        var _el$65 = _tmpl$1$2();
-        insert(_el$65, () => props.icon);
-        return _el$65;
+        var _el$87 = _tmpl$1$2();
+        insert(_el$87, () => props.icon);
+        return _el$87;
       })(), (() => {
-        var _el$66 = _tmpl$10$2();
-        insert(_el$66, () => props.label);
-        return _el$66;
+        var _el$88 = _tmpl$10$2();
+        insert(_el$88, () => props.label);
+        return _el$88;
       })()];
     }
   });
@@ -3253,21 +3339,21 @@ function SidebarLinkWithBadge(props) {
     activeClass: "active",
     get children() {
       return [(() => {
-        var _el$67 = _tmpl$1$2();
-        insert(_el$67, () => props.icon);
-        return _el$67;
+        var _el$89 = _tmpl$1$2();
+        insert(_el$89, () => props.icon);
+        return _el$89;
       })(), (() => {
-        var _el$68 = _tmpl$10$2();
-        insert(_el$68, () => props.label);
-        return _el$68;
+        var _el$90 = _tmpl$10$2();
+        insert(_el$90, () => props.label);
+        return _el$90;
       })(), createComponent(Show, {
         get when() {
           return warns() > 0;
         },
         get children() {
-          var _el$69 = _tmpl$11$1();
-          insert(_el$69, warns);
-          return _el$69;
+          var _el$91 = _tmpl$11$1();
+          insert(_el$91, warns);
+          return _el$91;
         }
       })];
     }
@@ -8029,4 +8115,4 @@ export {
   Resource as R,
   invoke as i
 };
-//# sourceMappingURL=index-CbetdrPT.js.map
+//# sourceMappingURL=index-DES0A9eA.js.map
