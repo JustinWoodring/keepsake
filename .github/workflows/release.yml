@@ -89,10 +89,14 @@ jobs:
       - name: Regenerate bundle icons
         # Rebuild icon.icns / icon.ico / *.png from
         # assets/source-icon.png so the CI artifacts
-        # always match the latest source art.
+        # always match the latest source art.  The macOS
+        # and Homebrew Python builds on the GH runners are
+        # 'externally managed' (PEP 668), so we install into a
+        # throwaway venv rather than pip-installing system-wide.
         run: |
-          python3 -m pip install --quiet Pillow
-          python3 scripts/make-icons.py
+          python3 -m venv .venv-icons
+          .venv-icons/bin/pip install --quiet Pillow
+          .venv-icons/bin/python scripts/make-icons.py
 
       - name: Stamp the version from the tag
         # The bundled app's version field is read from
