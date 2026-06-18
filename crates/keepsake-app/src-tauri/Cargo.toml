@@ -1,0 +1,39 @@
+[package]
+name        = "keepsake-app"
+version     = "0.1.0"
+edition     = "2021"
+rust-version = "1.91"
+license     = "MIT"
+description = "Keepsake desktop app — Tauri 2.x shell with Solid+TS frontend."
+
+[lib]
+name = "keepsake_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { workspace = true }
+
+[dependencies]
+keepsake-core  = { path = "../../keepsake-core" }
+tauri          = { workspace = true }
+tauri-plugin-fs = { workspace = true }
+tauri-plugin-dialog = "2"
+serde          = { version = "1", features = ["derive"] }
+serde_json     = "1"
+serde_yaml     = "0.9"
+tokio          = { version = "1", features = ["rt-multi-thread", "macros"] }
+parking_lot    = { workspace = true }
+rand           = { workspace = true }
+chrono         = { workspace = true }
+uuid           = { workspace = true }
+anyhow         = { workspace = true }
+thiserror      = { workspace = true }
+dirs           = { workspace = true }
+zeroize        = { workspace = true }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+tempfile = "3"

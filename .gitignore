@@ -1,0 +1,23 @@
+/target
+**/*.rs.bk
+.DS_Store
+*.pdb
+
+# Node / UI build
+node_modules/
+*.tsbuildinfo
+
+# editor
+.idea/
+.vscode/
+*.swp
+
+# Local sync server state
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Tmp
+/tmp/
+

@@ -1,0 +1,36 @@
+[package]
+name        = "keepsake-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "End-to-end-encrypted life organizer CLI."
+
+[[bin]]
+name = "keepsake"
+path = "src/main.rs"
+
+[dependencies]
+keepsake-core = { path = "../keepsake-core" }
+
+clap        = { workspace = true }
+ratatui     = { workspace = true }
+crossterm   = { workspace = true }
+dialoguer   = { workspace = true }
+rpassword   = { workspace = true }
+comfy-table = { workspace = true }
+
+anyhow    = { workspace = true }
+thiserror = { workspace = true }
+serde     = { workspace = true }
+serde_json = { workspace = true }
+chrono    = { workspace = true }
+uuid      = { workspace = true }
+dirs      = { workspace = true }
+rand      = { workspace = true }
+
+# dev server
+axum = { workspace = true }
+tokio = { workspace = true }
