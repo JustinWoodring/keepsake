@@ -313,31 +313,38 @@ pub async fn sync_pull(
 
 /// Set up (or rotate) the shared sync setup for `vault_id`.
 /// The passphrase is sealed inside the vault; the derived
-/// `shared_sync_key` is cached in the session.
+/// `shared_sync_key` is cached in the session.  If a
+/// `server_url` is provided, it is bound to the setup so
+/// the auto-sync loop can use it without a per-call arg.
 pub fn setup_shared_sync(
     state: &AppState,
     vault_id: String,
     passphrase: String,
+    server_url: Option<String>,
 ) -> Result<()> {
     let mut guard = state.session.lock();
     let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
-    session.vault.set_shared_sync(&vault_id, &passphrase)?;
+    session.vault.set_shared_sync(
+        &vault_id,
+        &passphrase,
+        server_url.as_deref(),
+    )?;
     session.refresh_shared_sync_keys()?;
     Ok(())
 }
 
 /// Reveal the shared sync setup for `vault_id`.  Returns
-/// `(vault_id, passphrase)` so the user can copy them
-/// out-of-band to configure another device.
+/// `(vault_id, passphrase, server_url)` so the user can
+/// copy them out-of-band to configure another device.
 pub fn reveal_shared_sync(
     state: &AppState,
     vault_id: String,
-) -> Result<(String, String)> {
+) -> Result<(String, String, Option<String>)> {
     let guard = state.session.lock();
     let session = guard.as_ref().ok_or(keepsake_core::Error::Locked)?;
     let setup = session.vault.get_shared_sync(&vault_id)?
         .ok_or_else(|| keepsake_core::Error::NotFound(format!("shared sync '{vault_id}'")))?;
-    Ok((setup.vault_id, setup.passphrase))
+    Ok((setup.vault_id, setup.passphrase, setup.server_url))
 }
 
 /// Delete the shared sync setup for `vault_id`.  Idempotent.
@@ -854,7 +861,10 @@ mod tests {
     use tempfile::tempdir;
 
     fn state() -> AppState {
-        AppState { session: Arc::new(Mutex::new(None)) }
+        AppState {
+            session: Arc::new(Mutex::new(None)),
+            auto_sync: Arc::new(parking_lot::Mutex::new(None)),
+        }
     }
 
     #[test]

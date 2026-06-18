@@ -1,0 +1,200 @@
+name: Release
+
+# Triggered by pushing a version tag of the form vX.Y.Z
+# (or vX.Y.Z-rc1, etc.).  Builds the desktop app and the
+# standalone sync server on all three platforms and attaches
+# every artifact to a GitHub release.
+#
+# To cut a release locally:
+#   1. Bump version in Cargo.toml (workspace), the Tauri
+#      crate's Cargo.toml, and crates/keepsake-app/src-tauri/
+#      tauri.conf.json
+#   2. Update Cargo.lock via `cargo update -w`
+#   3. Commit
+#   4. git tag vX.Y.Z && git push origin vX.Y.Z
+#
+# The job uses the `tauri-apps/tauri-action@v1` to build the
+# desktop app; it knows how to produce .dmg / .app on macOS,
+# .msi / .exe on Windows, and .AppImage / .deb on Linux.
+# The server is built separately as a plain release-mode
+# cargo artifact (cross-compiled where possible) and uploaded
+# alongside the desktop bundles.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the GitHub release
+
+jobs:
+  desktop:
+    name: Desktop app (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            os: macos
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            os: macos
+            args: --target x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            os: linux
+            args: ""
+          - platform: windows-latest
+            os: windows
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build deps
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            build-essential \
+            curl \
+            wget \
+            file
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/keepsake-app -> target
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: crates/keepsake-app/ui/package-lock.json
+
+      - name: Install UI deps
+        working-directory: crates/keepsake-app/ui
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: crates/keepsake-app
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_name }}
+          releaseName: "Keepsake ${{ github.ref_name }}"
+          releaseBody: |
+            Keepsake ${{ github.ref_name }} — end-to-end-encrypted
+            life organizer.  See `docs/sync-protocol.md` and
+            `docs/deploy-sync-server.md` for protocol and
+            server-deployment details.
+          releaseDraft: true
+          prerelease: false
+
+  server:
+    name: Sync server (${{ matrix.target }})
+    needs: desktop
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            archive: tar.gz
+            bin: keepsake-server
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            archive: tar.gz
+            bin: keepsake-server
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+            bin: keepsake-server
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+            bin: keepsake-server
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+            bin: keepsake-server.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/keepsake-server -> target
+
+      - name: Install Linux cross deps
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross
+
+      - name: Build (Linux native)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo build --release --target ${{ matrix.target }} -p keepsake-server
+
+      - name: Build (Linux cross)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p keepsake-server \
+            --config target.aarch64-unknown-linux-gnu.linker=\"aarch64-linux-gnu-gcc\"
+
+      - name: Build (macOS)
+        if: matrix.os == 'macos-latest'
+        run: cargo build --release --target ${{ matrix.target }} -p keepsake-server
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        run: cargo build --release --target ${{ matrix.target }} -p keepsake-server
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} dist/
+          if [ "${{ matrix.archive }}" = "tar.gz" ]; then
+            tar -C dist -czf keepsake-server-${{ matrix.target }}.tar.gz ${{ matrix.bin }}
+          else
+            (cd dist && zip ../keepsake-server-${{ matrix.target }}.zip ${{ matrix.bin }})
+          fi
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: keepsake-server-${{ matrix.target }}
+          path: keepsake-server-${{ matrix.target }}.*
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            keepsake-server-${{ matrix.target }}.tar.gz
+            keepsake-server-${{ matrix.target }}.zip
+          fail_on_unmatched_files: false

@@ -9,7 +9,9 @@ export function SyncPage() {
   const [busy, setBusy] = createSignal<
     "" | "push" | "pull" | "setup" | "reveal" | "delete"
   >("");
-  const [revealed, setRevealed] = createSignal<[string, string] | null>(null);
+  const [revealed, setRevealed] = createSignal<
+    [string, string, string | null] | null
+  >(null);
 
   // Wrapper that mirrors vaultId to localStorage.
   const setVaultId = (v: string) => {
@@ -94,7 +96,14 @@ export function SyncPage() {
     }
     setBusy("setup");
     try {
-      await api.setupSharedSync(vaultId(), passphrase());
+      // Save the URL too, so the auto-sync loop can find it
+      // without needing the UI's input on every tick.
+      state.setSyncUrl(url());
+      await api.setupSharedSync(
+        vaultId(),
+        passphrase(),
+        url() || null,
+      );
       setPassphrase("");
       setRevealed(null);
       await refetchSyncIds();
@@ -290,6 +299,21 @@ export function SyncPage() {
                   </button>
                 </div>
               </div>
+              <Show when={revealed()![2]}>
+                <div class="form-field">
+                  <label>server URL</label>
+                  <div style="display: flex; gap: 0.5rem">
+                    <input type="text" readonly value={revealed()![2]!} />
+                    <button
+                      type="button"
+                      class="btn"
+                      onClick={() => copyToClipboard(revealed()![2]!)}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              </Show>
               <p class="muted-small" style="margin: 0.5rem 0 0 0">
                 Anyone with the vault id and passphrase can read
                 and write every record in the vault.  Treat them

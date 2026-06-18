@@ -1,4 +1,4 @@
-import { i as invoke } from "./index-D9qR0rlf.js";
+import { i as invoke } from "./index-CbetdrPT.js";
 function buttonsToRust(buttons) {
   if (buttons === void 0) {
     return void 0;
@@ -70,4 +70,4 @@ export {
   open,
   save
 };
-//# sourceMappingURL=index-Dkqc1hAL.js.map
+//# sourceMappingURL=index-CQeWrNsp.js.map

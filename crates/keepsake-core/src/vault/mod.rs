@@ -77,6 +77,10 @@ pub struct SharedSyncSetup {
     pub kdf_t: u32,
     /// Argon2id parallelism.
     pub kdf_p: u32,
+    /// Optional server URL bound to this setup.  When set,
+    /// the auto-sync loop uses this URL without needing a
+    /// per-call value from the UI.
+    pub server_url: Option<String>,
     /// When this setup was first created.
     pub created_at: DateTime<Utc>,
     /// When this setup was last rotated; `None` if never rotated.
@@ -213,6 +217,7 @@ impl Vault {
                 kdf_m_kib         INTEGER NOT NULL,
                 kdf_t             INTEGER NOT NULL,
                 kdf_p             INTEGER NOT NULL,
+                server_url        TEXT,
                 created_at        INTEGER NOT NULL,
                 rotated_at        INTEGER
             );
@@ -316,10 +321,13 @@ impl Vault {
     /// seals the passphrase under the vault key, and persists
     /// the row.  If a row already exists, the `rotated_at`
     /// field is updated; otherwise `created_at` is set.
+    /// `server_url` is optional and stored as-is for the
+    /// auto-sync loop to use.
     pub fn set_shared_sync(
         &self,
         vault_id: &str,
         passphrase: &str,
+        server_url: Option<&str>,
     ) -> Result<()> {
         let key = self.require_unlocked()?;
         let shared_key = crate::sync::client::derive_shared_key(
@@ -347,8 +355,8 @@ impl Vault {
         self.conn.execute(
             "INSERT OR REPLACE INTO shared_sync_keys
                 (vault_id, passphrase, passphrase_nonce, kdf_salt,
-                 kdf_m_kib, kdf_t, kdf_p, created_at, rotated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 kdf_m_kib, kdf_t, kdf_p, server_url, created_at, rotated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 vault_id,
                 sealed,
@@ -357,6 +365,7 @@ impl Vault {
                 params.m_kib as i64,
                 params.t as i64,
                 params.p as i64,
+                server_url,
                 created_at,
                 if existing_created.is_some() { Some(now) } else { None },
             ],
@@ -374,10 +383,10 @@ impl Vault {
         vault_id: &str,
     ) -> Result<Option<SharedSyncSetup>> {
         let key = self.require_unlocked()?;
-        let row: Option<(Vec<u8>, Vec<u8>, Vec<u8>, i64, i64, i64, i64, Option<i64>)> =
+        let row: Option<(Vec<u8>, Vec<u8>, Vec<u8>, i64, i64, i64, Option<String>, i64, Option<i64>)> =
             self.conn.query_row(
                 "SELECT passphrase, passphrase_nonce, kdf_salt,
-                        kdf_m_kib, kdf_t, kdf_p, created_at, rotated_at
+                        kdf_m_kib, kdf_t, kdf_p, server_url, created_at, rotated_at
                  FROM shared_sync_keys WHERE vault_id = ?1",
                 params![vault_id],
                 |r| Ok((
@@ -387,12 +396,13 @@ impl Vault {
                     r.get::<_, i64>(3)?,
                     r.get::<_, i64>(4)?,
                     r.get::<_, i64>(5)?,
-                    r.get::<_, i64>(6)?,
-                    r.get::<_, Option<i64>>(7)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, Option<i64>>(8)?,
                 )),
             )
             .optional()?;
-        let Some((sealed, nonce, kdf_salt, m_kib, t, p, created_at, rotated_at)) = row else {
+        let Some((sealed, nonce, kdf_salt, m_kib, t, p, server_url, created_at, rotated_at)) = row else {
             return Ok(None);
         };
         let nonce_arr: [u8; 24] = nonce.try_into().map_err(|_| {
@@ -417,6 +427,7 @@ impl Vault {
             kdf_m_kib: m_kib as u32,
             kdf_t: t as u32,
             kdf_p: p as u32,
+            server_url,
             created_at: DateTime::<Utc>::from_timestamp(created_at, 0)
                 .ok_or_else(|| Error::Vault("bad created_at".into()))?,
             rotated_at: rotated_at
@@ -1144,10 +1155,11 @@ mod tests {
         let mut v = Vault::open_or_create(&dir.path().join("vault.db")).unwrap();
         unlock(&mut v);
 
-        v.set_shared_sync("family", "passphrase-abc").unwrap();
+        v.set_shared_sync("family", "passphrase-abc", Some("https://sync.example.com")).unwrap();
         let setup = v.get_shared_sync("family").unwrap().unwrap();
         assert_eq!(setup.vault_id, "family");
         assert_eq!(setup.passphrase, "passphrase-abc");
+        assert_eq!(setup.server_url.as_deref(), Some("https://sync.example.com"));
         assert!(setup.rotated_at.is_none());
     }
 
@@ -1157,10 +1169,10 @@ mod tests {
         let mut v = Vault::open_or_create(&dir.path().join("vault.db")).unwrap();
         unlock(&mut v);
 
-        v.set_shared_sync("family", "old").unwrap();
+        v.set_shared_sync("family", "old", None).unwrap();
         let first = v.get_shared_sync("family").unwrap().unwrap();
         std::thread::sleep(std::time::Duration::from_secs(1));
-        v.set_shared_sync("family", "new").unwrap();
+        v.set_shared_sync("family", "new", None).unwrap();
         let second = v.get_shared_sync("family").unwrap().unwrap();
         assert_eq!(second.passphrase, "new");
         assert_eq!(second.created_at, first.created_at);
@@ -1180,7 +1192,7 @@ mod tests {
         let mut v = Vault::open_or_create(&dir.path().join("vault.db")).unwrap();
         unlock(&mut v);
 
-        v.set_shared_sync("family", "shared-pass").unwrap();
+        v.set_shared_sync("family", "shared-pass", None).unwrap();
         let k1 = v.get_shared_sync_key("family").unwrap().unwrap();
         let k2 = v.get_shared_sync_key("family").unwrap().unwrap();
         assert_eq!(k1.as_bytes(), k2.as_bytes());
@@ -1192,8 +1204,8 @@ mod tests {
         let mut v = Vault::open_or_create(&dir.path().join("vault.db")).unwrap();
         unlock(&mut v);
 
-        v.set_shared_sync("a", "p1").unwrap();
-        v.set_shared_sync("b", "p2").unwrap();
+        v.set_shared_sync("a", "p1", None).unwrap();
+        v.set_shared_sync("b", "p2", None).unwrap();
         let mut ids = v.list_shared_syncs().unwrap();
         ids.sort();
         assert_eq!(ids, vec!["a", "b"]);

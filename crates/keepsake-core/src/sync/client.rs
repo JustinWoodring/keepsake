@@ -242,7 +242,7 @@ pub fn derive_shared_key(passphrase: &[u8], vault_id: &str) -> Result<AeadKey> {
 /// Wrap an on-disk local envelope `(aead_nonce, aead_aad,
 /// ciphertext)` in an outer AEAD keyed by `shared_key`.
 /// Returns the wire payload: `outer_nonce || outer_ciphertext`.
-fn wrap_envelope(
+pub fn wrap_envelope(
     shared_key: &AeadKey,
     aead_nonce: &[u8],
     aead_aad: &[u8],
@@ -274,7 +274,7 @@ fn wrap_envelope(
 /// `(aead_nonce, aead_aad, ciphertext)`.  Does NOT decrypt
 /// the inner; the caller does that with the local vault
 /// key.
-fn unwrap_envelope(shared_key: &AeadKey, payload: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+pub fn unwrap_envelope(shared_key: &AeadKey, payload: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     if payload.len() < 24 {
         return Err(Error::Sync("wire payload too short".into()));
     }
@@ -384,7 +384,7 @@ fn apply_remote_change(shared_key: &AeadKey, session: &mut Session, ch: &Change)
 /// Decode the inner AAD (built by `vault::build_aad`) into a
 /// `RecordHeader`.  Validates the AAD bytes match the
 /// expected layout and the `record_id` matches.
-fn decode_inner_aad(
+pub fn decode_inner_aad(
     aad: &[u8],
     record_id: Uuid,
     author: &str,

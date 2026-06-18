@@ -110,6 +110,15 @@ export interface RecordTitle {
   title: string;
 }
 
+export interface AutoSyncStatus {
+  enabled: boolean;
+  running: boolean;
+  last_push_at: string | null;
+  last_pull_at: string | null;
+  last_error: string | null;
+  next_at: string | null;
+}
+
 export const api = {
   defaultPath:   (): Promise<string> => invoke("default_path"),
   status:        (): Promise<StatusResponse> => invoke("status"),
@@ -143,13 +152,27 @@ export const api = {
     invoke("sync_push", { serverUrl, vaultId }),
   syncPull: (serverUrl: string, vaultId: string): Promise<number> =>
     invoke("sync_pull", { serverUrl, vaultId }),
-  setupSharedSync: (vaultId: string, passphrase: string): Promise<void> =>
-    invoke("setup_shared_sync", { vaultId, passphrase }),
-  revealSharedSync: (vaultId: string): Promise<[string, string]> =>
+  setupSharedSync: (
+    vaultId: string,
+    passphrase: string,
+    serverUrl: string | null,
+  ): Promise<void> =>
+    invoke("setup_shared_sync", {
+      vaultId,
+      passphrase,
+      serverUrl: serverUrl ?? null,
+    }),
+  revealSharedSync: (
+    vaultId: string,
+  ): Promise<[string, string, string | null]> =>
     invoke("reveal_shared_sync", { vaultId }),
   deleteSharedSync: (vaultId: string): Promise<void> =>
     invoke("delete_shared_sync", { vaultId }),
   listSharedSyncs: (): Promise<string[]> => invoke("list_shared_syncs"),
+  autoSyncStatus: (): Promise<AutoSyncStatus> =>
+    invoke("auto_sync_status"),
+  setAutoSync: (enabled: boolean): Promise<void> =>
+    invoke("set_auto_sync", { enabled }),
 
   exportBundle:  (passphrase: string): Promise<number[]> =>
     invoke("export_bundle", { passphrase }),

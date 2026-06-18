@@ -37,7 +37,7 @@ pub async fn run(
                     .interact()?,
             };
             with_unlocked_mut(session, |sess| -> keepsake_core::Result<()> {
-                sess.vault.set_shared_sync(&vault_id, &pass)?;
+                sess.vault.set_shared_sync(&vault_id, &pass, None)?;
                 sess.refresh_shared_sync_keys()?;
                 Ok(())
             })?;

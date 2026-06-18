@@ -10,12 +10,29 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use tauri::State;
 
+mod auto_sync;
 mod session;
 
 /// Per-app state.  The session is held behind a Mutex; the
-/// vault inside is locked when this is `None`.
+/// vault inside is locked when this is `None`.  The
+/// auto-sync loop runs while the session is unlocked; its
+/// handle is stored here so it can be stopped on `lock` or
+/// reconfigured from the UI.
 pub struct AppState {
     pub session: Arc<Mutex<Option<keepsake_core::session::Session>>>,
+    pub auto_sync: Arc<parking_lot::Mutex<Option<auto_sync::AutoSyncHandle>>>,
+}
+
+impl AppState {
+    /// Build a fresh `AppState` with no session and no
+    /// auto-sync loop.  Cheaper than cloning the `AppState`
+    /// across `spawn_blocking` closures.
+    pub fn clone_state(&self) -> Arc<AppState> {
+        Arc::new(AppState {
+            session: self.session.clone(),
+            auto_sync: self.auto_sync.clone(),
+        })
+    }
 }
 
 fn default_vault_path() -> std::path::PathBuf {
@@ -37,7 +54,10 @@ async fn init(
     session::init(&state, &p, &username, &password).map_err(|e| e.to_string())
 }
 
-/// Unlock an existing vault.
+/// Unlock an existing vault.  Also starts the auto-sync
+/// loop, which pushes and pulls every 30 minutes (and once
+/// immediately) for every shared-sync setup that has a
+/// `server_url` bound to it.
 #[tauri::command]
 async fn unlock(
     state: State<'_, AppState>,
@@ -48,12 +68,26 @@ async fn unlock(
     let p = path
         .map(std::path::PathBuf::from)
         .unwrap_or_else(default_vault_path);
-    session::unlock(&state, &p, &username, &password).map_err(|e| e.to_string())
+    session::unlock(&state, &p, &username, &password)
+        .map_err(|e| e.to_string())?;
+    // Stop any previous loop (defensive; should be None
+    // after a `lock`).
+    if let Some(prev) = state.auto_sync.lock().take() {
+        prev.stop();
+    }
+    let snapshot = state.clone_state();
+    let handle = auto_sync::spawn(snapshot);
+    *state.auto_sync.lock() = Some(handle);
+    Ok(())
 }
 
-/// Lock the vault, zeroizing the in-memory key.
+/// Lock the vault, zeroizing the in-memory key, and stop
+/// the auto-sync loop.
 #[tauri::command]
 async fn lock(state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(prev) = state.auto_sync.lock().take() {
+        prev.stop();
+    }
     session::lock(&state);
     Ok(())
 }
@@ -207,24 +241,28 @@ async fn sync_pull(
 }
 
 /// Set up (or rotate) the shared sync setup for `vault_id`.
-/// Seals the passphrase inside the vault.
+/// Seals the passphrase inside the vault.  `server_url` is
+/// bound to the setup so the auto-sync loop can find it
+/// without a per-call arg.
 #[tauri::command]
 async fn setup_shared_sync(
     state: State<'_, AppState>,
     vault_id: String,
     passphrase: String,
+    server_url: Option<String>,
 ) -> Result<(), String> {
-    session::setup_shared_sync(&state, vault_id, passphrase).map_err(|e| e.to_string())
+    session::setup_shared_sync(&state, vault_id, passphrase, server_url)
+        .map_err(|e| e.to_string())
 }
 
 /// Reveal the shared sync setup for `vault_id`.  Returns
-/// `(vault_id, passphrase)`.  The user can copy this to
-/// another device to configure sync there.
+/// `(vault_id, passphrase, server_url)`.  The user can copy
+/// these to another device to configure sync there.
 #[tauri::command]
 async fn reveal_shared_sync(
     state: State<'_, AppState>,
     vault_id: String,
-) -> Result<(String, String), String> {
+) -> Result<(String, String, Option<String>), String> {
     session::reveal_shared_sync(&state, vault_id).map_err(|e| e.to_string())
 }
 
@@ -248,6 +286,63 @@ async fn list_shared_syncs(
         keepsake_core::Error::Locked.to_string()
     })?;
     session.vault.list_shared_syncs().map_err(|e| e.to_string())
+}
+
+/// Return the current auto-sync loop's status (running,
+/// last push/pull timestamps, last error, scheduled next
+/// run).  Returns a default "off" status if the loop isn't
+/// running.
+#[tauri::command]
+async fn auto_sync_status(state: State<'_, AppState>) -> Result<auto_sync::AutoSyncStatus, String> {
+    let guard = state.auto_sync.lock();
+    Ok(guard.as_ref()
+        .map(|h| h.status_snapshot())
+        .unwrap_or_default())
+}
+
+/// Toggle the auto-sync loop on or off.  Disabling stops
+/// the running loop; enabling spawns a new one.  The loop
+/// is automatically stopped on `lock` and a fresh one
+/// spawned on `unlock`, so the UI control is mostly for
+/// the "pause sync while I work" case.
+#[tauri::command]
+async fn set_auto_sync(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let mut guard = state.auto_sync.lock();
+    match (enabled, guard.as_ref()) {
+        (false, Some(h)) => {
+            let mut s = h.status_snapshot();
+            s.enabled = false;
+            // Take the handle out and stop it.  The
+            // status snapshot is lost on drop, so we
+            // re-insert a no-op handle that just holds
+            // the last status.
+            let prev = guard.take().unwrap();
+            prev.stop();
+            // We can't easily preserve the last status
+            // because AutoSyncHandle owns it.  A future
+            // improvement could split the status from
+            // the handle.  For v1, disabling clears
+            // visible status until the next unlock.
+            let _ = s;
+        }
+        (true, None) => {
+            // Spawn a fresh loop.  Requires the session
+            // to be unlocked.
+            let session_present = state.session.lock().is_some();
+            if !session_present {
+                return Err("vault must be unlocked to enable auto-sync".into());
+            }
+            let snapshot = state.clone_state();
+            *guard = Some(auto_sync::spawn(snapshot));
+        }
+        (true, Some(_)) => {
+            // Already running.  No-op.
+        }
+        (false, None) => {
+            // Already disabled.  No-op.
+        }
+    }
+    Ok(())
 }
 
 /// Add a new user to this device's vault.
@@ -343,6 +438,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             session: Arc::new(Mutex::new(None)),
+            auto_sync: Arc::new(parking_lot::Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
             init,
@@ -372,6 +468,8 @@ pub fn run() {
             reveal_shared_sync,
             delete_shared_sync,
             list_shared_syncs,
+            auto_sync_status,
+            set_auto_sync,
             default_path,
         ])
         .run(tauri::generate_context!())
