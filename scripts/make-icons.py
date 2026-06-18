@@ -83,13 +83,29 @@ def parse_in_venv(argv: list[str], root: Path) -> tuple[Path | None, list[str]]:
 def bootstrap_venv() -> None:
     """Handle `--in-venv` re-exec before any heavy imports.
     Raises SystemExit after the re-exec; otherwise
-    returns and the rest of the script proceeds."""
+    returns and the rest of the script proceeds.
+
+    Identifying "are we already in the venv" is tricky
+    because venvs created by `python -m venv` symlink
+    python3 back to the parent interpreter.  Comparing
+    `sys.executable` resolves through the symlink to the
+    same binary in both processes.  Use `sys.prefix`
+    instead, which IS isolated — `sys.prefix` is the venv
+    directory when inside a venv, or the system prefix
+    when not.
+    """
     in_venv, rest = parse_in_venv(sys.argv[1:], ROOT)
     if in_venv is None:
         return
     py = ensure_venv(in_venv)
-    if Path(sys.executable).resolve() == py.resolve():
-        return  # already inside the venv
+    # sys.prefix is the venv root when we're in a venv.
+    if Path(sys.prefix).resolve() == in_venv.resolve():
+        sys.stderr.write(f"[make-icons] already in venv: {sys.prefix}\n")
+        return
+    sys.stderr.write(
+        f"[make-icons] re-exec into venv: "
+        f"prefix={sys.prefix} -> {in_venv}\n"
+    )
     rc = subprocess.call([str(py), __file__, *rest])
     raise SystemExit(rc)
 
