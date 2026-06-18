@@ -2526,7 +2526,34 @@ const [status, setStatus] = createSignal({
 });
 const [vaultPath, setVaultPath] = createSignal("");
 const [users, setUsers] = createSignal([]);
-const [syncUrl, setSyncUrl] = createSignal("");
+function persistedSignal(key, initial) {
+  let starting = initial;
+  try {
+    if (typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem(key);
+      if (stored !== null) starting = stored;
+    }
+  } catch {
+  }
+  const [get, set] = createSignal(starting, { equals: false });
+  return [
+    get,
+    (v2) => {
+      set(() => v2);
+      try {
+        if (typeof localStorage !== "undefined") {
+          localStorage.setItem(key, v2);
+        }
+      } catch {
+      }
+    }
+  ];
+}
+const [syncUrl, setSyncUrl] = persistedSignal("keepsake.syncUrl", "");
+const [syncVaultId, setSyncVaultId] = persistedSignal(
+  "keepsake.syncVaultId",
+  ""
+);
 const [toast, setToast] = createSignal(null);
 function showToast(kind, text2) {
   setToast({ kind, text: text2 });
@@ -2558,6 +2585,8 @@ const state = {
   setUsers,
   syncUrl,
   setSyncUrl,
+  syncVaultId,
+  setSyncVaultId,
   toast,
   setToast
 };
@@ -2850,7 +2879,7 @@ function installLinkClickHandler(navigate) {
     navigateFn?.(path);
   });
 }
-var _tmpl$$9 = /* @__PURE__ */ template(`<div class=app>`), _tmpl$2$8 = /* @__PURE__ */ template(`<form class=unlock-form><div class=unlock-field><label>username</label><input autocomplete=username required autofocus></div><div class=unlock-field><label>password</label><input type=password autocomplete=current-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary unlock-flex">`), _tmpl$3$8 = /* @__PURE__ */ template(`<div class=form-error>`), _tmpl$4$8 = /* @__PURE__ */ template(`<div class=unlock-form><button type=button class="btn btn-primary btn-block btn-lg">+ Create new vault</button><form id=unlock-init-form class="unlock-init-form hidden"><div class=unlock-field><label>username</label><input autocomplete=username required></div><div class=unlock-field><label>password</label><input type=password autocomplete=new-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary btn-block"></button></div></form><div class=unlock-divider><span>or</span></div><button type=button class="btn btn-block btn-lg">⤓ Import .ksk bundle</button><form id=unlock-import-form class="unlock-init-form hidden"><div class=unlock-field><label>bundle file</label><div class=row><input type=text placeholder="No file selected"readonly><button type=button class=btn>Choose…</button></div></div><div class=unlock-field><label>export passphrase</label><input type=password autocomplete=current-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary btn-block">`), _tmpl$5$8 = /* @__PURE__ */ template(`<div><span class=muted-small>users on this device:</span> `), _tmpl$6$5 = /* @__PURE__ */ template(`<div class=unlock-shell><div class=unlock-card><div class=unlock-brand><div class=unlock-mark>K</div><span class=unlock-name>Keepsake</span></div><h1 class=unlock-title></h1><p class=unlock-sub></p><div class=unlock-meta><div><span class=muted-small>vault:</span> <code>`), _tmpl$7$5 = /* @__PURE__ */ template(`<code>`), _tmpl$8$5 = /* @__PURE__ */ template(`<div class=shell><main>`), _tmpl$9$3 = /* @__PURE__ */ template(`<aside class=sidebar><div class=sidebar-brand><div class=sidebar-mark>K</div><div class=sidebar-brand-text><span class=sidebar-brand-name>Keepsake</span><span class=sidebar-brand-user></span></div></div><nav class=sidebar-nav></nav><div class=sidebar-scroll><div class=sidebar-section>System</div><nav></nav></div><div class=sidebar-footer><button class="btn btn-ghost"title="Lock vault">🔒 Lock`), _tmpl$0$3 = /* @__PURE__ */ template(`<div class=sidebar-group><div class=sidebar-section></div><nav>`), _tmpl$1$2 = /* @__PURE__ */ template(`<span class=ic>`), _tmpl$10$2 = /* @__PURE__ */ template(`<span class=lbl>`), _tmpl$11$1 = /* @__PURE__ */ template(`<span class=sidebar-badge>`);
+var _tmpl$$9 = /* @__PURE__ */ template(`<div class=app>`), _tmpl$2$8 = /* @__PURE__ */ template(`<form class=unlock-form><div class=unlock-field><label>username</label><input autocomplete=username required autofocus></div><div class=unlock-field><label>password</label><input type=password autocomplete=current-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary unlock-flex">`), _tmpl$3$8 = /* @__PURE__ */ template(`<div class=form-error>`), _tmpl$4$8 = /* @__PURE__ */ template(`<div class=unlock-form><button type=button class="btn btn-primary btn-block btn-lg">+ Create new vault</button><form id=unlock-init-form class="unlock-init-form hidden"><div class=unlock-field><label>username</label><input autocomplete=username required></div><div class=unlock-field><label>password</label><input type=password autocomplete=new-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary btn-block"></button></div></form><div class=unlock-divider><span>or</span></div><button type=button class="btn btn-block btn-lg">⤓ Import .ksk bundle</button><form id=unlock-import-form class="unlock-init-form hidden"><div class=unlock-field><label>bundle file</label><div class=row><input type=text placeholder="No file selected"readonly><button type=button class=btn>Choose…</button></div></div><div class=unlock-field><label>export passphrase</label><input type=password autocomplete=current-password required></div><div class=unlock-actions><button type=submit class="btn btn-primary btn-block">`), _tmpl$5$8 = /* @__PURE__ */ template(`<div><span class=muted-small>users on this device:</span> `), _tmpl$6$6 = /* @__PURE__ */ template(`<div class=unlock-shell><div class=unlock-card><div class=unlock-brand><div class=unlock-mark>K</div><span class=unlock-name>Keepsake</span></div><h1 class=unlock-title></h1><p class=unlock-sub></p><div class=unlock-meta><div><span class=muted-small>vault:</span> <code>`), _tmpl$7$5 = /* @__PURE__ */ template(`<code>`), _tmpl$8$5 = /* @__PURE__ */ template(`<div class=shell><main>`), _tmpl$9$3 = /* @__PURE__ */ template(`<aside class=sidebar><div class=sidebar-brand><div class=sidebar-mark>K</div><div class=sidebar-brand-text><span class=sidebar-brand-name>Keepsake</span><span class=sidebar-brand-user></span></div></div><nav class=sidebar-nav></nav><div class=sidebar-scroll><div class=sidebar-section>System</div><nav></nav></div><div class=sidebar-footer><button class="btn btn-ghost"title="Lock vault">🔒 Lock`), _tmpl$0$3 = /* @__PURE__ */ template(`<div class=sidebar-group><div class=sidebar-section></div><nav>`), _tmpl$1$2 = /* @__PURE__ */ template(`<span class=ic>`), _tmpl$10$2 = /* @__PURE__ */ template(`<span class=lbl>`), _tmpl$11$1 = /* @__PURE__ */ template(`<span class=sidebar-badge>`);
 function App(props) {
   const navigate = useNavigate();
   onMount(async () => {
@@ -2929,7 +2958,7 @@ function Unlock() {
       } = await __vitePreload(async () => {
         const {
           open: open2
-        } = await import("./index-B7pjwBEp.js");
+        } = await import("./index-Dkqc1hAL.js");
         return {
           open: open2
         };
@@ -2947,7 +2976,7 @@ function Unlock() {
       } = await __vitePreload(async () => {
         const {
           readTextFile: readTextFile2
-        } = await import("./index-D2cRSdIW.js");
+        } = await import("./index-BYG0NdUi.js");
         return {
           readTextFile: readTextFile2
         };
@@ -3004,7 +3033,7 @@ function Unlock() {
     }
   }
   return (() => {
-    var _el$2 = _tmpl$6$5(), _el$3 = _el$2.firstChild, _el$4 = _el$3.firstChild, _el$5 = _el$4.nextSibling, _el$6 = _el$5.nextSibling, _el$39 = _el$6.nextSibling, _el$43 = _el$39.firstChild, _el$44 = _el$43.firstChild, _el$45 = _el$44.nextSibling, _el$46 = _el$45.nextSibling;
+    var _el$2 = _tmpl$6$6(), _el$3 = _el$2.firstChild, _el$4 = _el$3.firstChild, _el$5 = _el$4.nextSibling, _el$6 = _el$5.nextSibling, _el$39 = _el$6.nextSibling, _el$43 = _el$39.firstChild, _el$44 = _el$43.firstChild, _el$45 = _el$44.nextSibling, _el$46 = _el$45.nextSibling;
     insert(_el$5, (() => {
       var _c$ = memo(() => !!hasVault());
       return () => _c$() ? "Unlock your vault" : importing() ? "Importing…" : "Set up your vault";
@@ -3239,7 +3268,7 @@ function SidebarLinkWithBadge(props) {
   });
 }
 delegateEvents(["input", "click"]);
-var _tmpl$$8 = /* @__PURE__ */ template(`<section class=dashboard-section><header class=dashboard-section-header><h2>Worth looking at</h2></header><div class=insights-list>`), _tmpl$2$7 = /* @__PURE__ */ template(`<section class=dashboard-section><header class=dashboard-section-header><h2>Recent activity</h2></header><div class=dashboard-activity>`), _tmpl$3$7 = /* @__PURE__ */ template(`<div class=page><div class=dashboard-hero><div><h1>.</h1><p>Your encrypted vault.</p></div><div class=dashboard-hero-stat><span class=dashboard-hero-stat-value></span><span class=dashboard-hero-stat-label>records</span></div></div><section class=dashboard-section><header class=dashboard-section-header><h2>Categories</h2></header><div class=dashboard-groups>`), _tmpl$4$7 = /* @__PURE__ */ template(`<div><div class=insight-icon></div><div class=insight-body><div class=insight-title></div><div class=insight-detail>`), _tmpl$5$7 = /* @__PURE__ */ template(`<div class=dashboard-group-info><h3></h3><div class=dashboard-group-types>`), _tmpl$6$4 = /* @__PURE__ */ template(`<div class=dashboard-group-count>`), _tmpl$7$4 = /* @__PURE__ */ template(`<span class=dashboard-group-type><span class=ic>`), _tmpl$8$4 = /* @__PURE__ */ template(`<div class=dashboard-activity-row><span class=dashboard-activity-time></span><span class=dashboard-activity-op></span><span class=dashboard-activity-actor>`);
+var _tmpl$$8 = /* @__PURE__ */ template(`<section class=dashboard-section><header class=dashboard-section-header><h2>Worth looking at</h2></header><div class=insights-list>`), _tmpl$2$7 = /* @__PURE__ */ template(`<section class=dashboard-section><header class=dashboard-section-header><h2>Recent activity</h2></header><div class=dashboard-activity>`), _tmpl$3$7 = /* @__PURE__ */ template(`<div class=page><div class=dashboard-hero><div><h1>.</h1><p>Your encrypted vault.</p></div><div class=dashboard-hero-stat><span class=dashboard-hero-stat-value></span><span class=dashboard-hero-stat-label>records</span></div></div><section class=dashboard-section><header class=dashboard-section-header><h2>Categories</h2></header><div class=dashboard-groups>`), _tmpl$4$7 = /* @__PURE__ */ template(`<div><div class=insight-icon></div><div class=insight-body><div class=insight-title></div><div class=insight-detail>`), _tmpl$5$7 = /* @__PURE__ */ template(`<div class=dashboard-group-info><h3></h3><div class=dashboard-group-types>`), _tmpl$6$5 = /* @__PURE__ */ template(`<div class=dashboard-group-count>`), _tmpl$7$4 = /* @__PURE__ */ template(`<span class=dashboard-group-type><span class=ic>`), _tmpl$8$4 = /* @__PURE__ */ template(`<div class=dashboard-activity-row><span class=dashboard-activity-time></span><span class=dashboard-activity-op></span><span class=dashboard-activity-actor>`);
 function Dashboard() {
   const [counts, {
     refetch: refetchCounts
@@ -3381,7 +3410,7 @@ function Dashboard() {
             }));
             return _el$22;
           })(), (() => {
-            var _el$25 = _tmpl$6$4();
+            var _el$25 = _tmpl$6$5();
             insert(_el$25, () => g2.total);
             return _el$25;
           })()];
@@ -3564,7 +3593,7 @@ function renderCell(def, fields) {
   if (typeof raw === "number") return String(raw);
   return String(raw);
 }
-var _tmpl$$7 = /* @__PURE__ */ template(`<span class=muted> · `), _tmpl$2$6 = /* @__PURE__ */ template(`<div class=table-wrap><table class=rows><colgroup><col style=width:1px></colgroup><thead><tr><th class=col-actions style=text-align:right>actions</th></tr></thead><tbody>`), _tmpl$3$6 = /* @__PURE__ */ template(`<div class=page><header class=page-header><div><h1 class=page-title><span class=title-emoji></span></h1><p class=page-sub> record</p></div><div class=page-actions><input class=input placeholder=Filter… style=width:220px>`), _tmpl$4$6 = /* @__PURE__ */ template(`<p class=muted>Loading…`), _tmpl$5$6 = /* @__PURE__ */ template(`<div class=table-wrap><div class=empty-state><div class=empty-state-emoji></div><p class=empty-state-title>No <!> yet</p><p class=empty-state-sub>Add your first one to get started.`), _tmpl$6$3 = /* @__PURE__ */ template(`<col>`), _tmpl$7$3 = /* @__PURE__ */ template(`<th>`), _tmpl$8$3 = /* @__PURE__ */ template(`<tr><td class=actions><button type=button class=action-danger>delete`), _tmpl$9$2 = /* @__PURE__ */ template(`<td class=col-cell>`), _tmpl$0$2 = /* @__PURE__ */ template(`<span class=muted>—`);
+var _tmpl$$7 = /* @__PURE__ */ template(`<span class=muted> · `), _tmpl$2$6 = /* @__PURE__ */ template(`<div class=table-wrap><table class=rows><colgroup><col style=width:1px></colgroup><thead><tr><th class=col-actions style=text-align:right>actions</th></tr></thead><tbody>`), _tmpl$3$6 = /* @__PURE__ */ template(`<div class=page><header class=page-header><div><h1 class=page-title><span class=title-emoji></span></h1><p class=page-sub> record</p></div><div class=page-actions><input class=input placeholder=Filter… style=width:220px>`), _tmpl$4$6 = /* @__PURE__ */ template(`<p class=muted>Loading…`), _tmpl$5$6 = /* @__PURE__ */ template(`<div class=table-wrap><div class=empty-state><div class=empty-state-emoji></div><p class=empty-state-title>No <!> yet</p><p class=empty-state-sub>Add your first one to get started.`), _tmpl$6$4 = /* @__PURE__ */ template(`<col>`), _tmpl$7$3 = /* @__PURE__ */ template(`<th>`), _tmpl$8$3 = /* @__PURE__ */ template(`<tr><td class=actions><button type=button class=action-danger>delete`), _tmpl$9$2 = /* @__PURE__ */ template(`<td class=col-cell>`), _tmpl$0$2 = /* @__PURE__ */ template(`<span class=muted>—`);
 function Category() {
   const params = useParams();
   const recordType = () => params.type;
@@ -3684,7 +3713,7 @@ function Category() {
               children: (c) => {
                 const w2 = typeof c.flex === "number" ? `${c.flex / totalFlex() * 100}%` : c.flex;
                 return (() => {
-                  var _el$27 = _tmpl$6$3();
+                  var _el$27 = _tmpl$6$4();
                   setStyleProperty(_el$27, "width", w2);
                   return _el$27;
                 })();
@@ -6600,7 +6629,7 @@ function Markdown(props) {
     return _el$;
   })();
 }
-var _tmpl$$5 = /* @__PURE__ */ template(`<span class=title-emoji>`), _tmpl$2$5 = /* @__PURE__ */ template(`<dl class=detail-fields>`), _tmpl$3$5 = /* @__PURE__ */ template(`<details class=raw-details><summary>Raw JSON</summary><pre class=json-view>`), _tmpl$4$5 = /* @__PURE__ */ template(`<div class=page><header class=page-header><div><h1 class=page-title></h1><p class=page-sub><code class=id-mono></code></p></div><div class=page-actions><button class=btn></button><button class="btn btn-danger">🗑 Delete`), _tmpl$5$5 = /* @__PURE__ */ template(`<p class=muted>Loading…`), _tmpl$6$2 = /* @__PURE__ */ template(`<p class=muted>This record has no fields yet.`), _tmpl$7$2 = /* @__PURE__ */ template(`<dt class=detail-label>`), _tmpl$8$2 = /* @__PURE__ */ template(`<dd>`), _tmpl$9$1 = /* @__PURE__ */ template(`<span>`), _tmpl$0$1 = /* @__PURE__ */ template(`<section class=runbook-section><h3>Steps</h3><ol class=runbook-steps>`), _tmpl$1$1 = /* @__PURE__ */ template(`<div class=step-status>`), _tmpl$10$1 = /* @__PURE__ */ template(`<li><div class=step-title>`);
+var _tmpl$$5 = /* @__PURE__ */ template(`<span class=title-emoji>`), _tmpl$2$5 = /* @__PURE__ */ template(`<dl class=detail-fields>`), _tmpl$3$5 = /* @__PURE__ */ template(`<details class=raw-details><summary>Raw JSON</summary><pre class=json-view>`), _tmpl$4$5 = /* @__PURE__ */ template(`<div class=page><header class=page-header><div><h1 class=page-title></h1><p class=page-sub><code class=id-mono></code></p></div><div class=page-actions><button class=btn></button><button class="btn btn-danger">🗑 Delete`), _tmpl$5$5 = /* @__PURE__ */ template(`<p class=muted>Loading…`), _tmpl$6$3 = /* @__PURE__ */ template(`<p class=muted>This record has no fields yet.`), _tmpl$7$2 = /* @__PURE__ */ template(`<dt class=detail-label>`), _tmpl$8$2 = /* @__PURE__ */ template(`<dd>`), _tmpl$9$1 = /* @__PURE__ */ template(`<span>`), _tmpl$0$1 = /* @__PURE__ */ template(`<section class=runbook-section><h3>Steps</h3><ol class=runbook-steps>`), _tmpl$1$1 = /* @__PURE__ */ template(`<div class=step-status>`), _tmpl$10$1 = /* @__PURE__ */ template(`<li><div class=step-title>`);
 function asSteps(v2) {
   if (!Array.isArray(v2)) return null;
   return v2.filter((s) => typeof s === "object" && s !== null && typeof s.title === "string" && typeof s.body === "string");
@@ -6752,7 +6781,7 @@ function RecordDetail() {
             return fieldRows().length > 0;
           },
           get fallback() {
-            return _tmpl$6$2();
+            return _tmpl$6$3();
           },
           get children() {
             var _el$1 = _tmpl$2$5();
@@ -7198,7 +7227,7 @@ function RecordForm() {
   })();
 }
 delegateEvents(["click", "input"]);
-var _tmpl$$3 = /* @__PURE__ */ template(`<div class="banner banner-warn">⚠️ Chain verification failed at entry <!>. The entries below are still displayed, but the chain is broken — usually because an older entry was written by an earlier version of Keepsake with a different hash function.`), _tmpl$2$3 = /* @__PURE__ */ template(`<p class=muted>Loading…`), _tmpl$3$3 = /* @__PURE__ */ template(`<div class=empty-state><div class=empty-state-emoji>⚠️</div><p class=empty-state-title>Failed to read audit log</p><p class=empty-state-sub>`), _tmpl$4$3 = /* @__PURE__ */ template(`<div class=empty-state><div class=empty-state-emoji>🛡</div><p class=empty-state-title>No audit entries yet</p><p class=empty-state-sub>Actions like unlocking the vault, adding records, and changing your password are recorded here.`), _tmpl$5$3 = /* @__PURE__ */ template(`<div class=table-wrap><table class=rows><thead><tr><th>seq</th><th>op</th><th>actor</th><th>target</th><th>details</th><th>ts</th></tr></thead><tbody>`), _tmpl$6$1 = /* @__PURE__ */ template(`<div class=page><header class=page-header><div><h1 class=page-title>🛡 Audit</h1><p class=page-sub>Append-only, hash-chained record of every change.</p></div><div class=page-actions><button class=btn>Refresh</button><button class=btn>Verify chain</button><button class="btn btn-danger">Reset chain`), _tmpl$7$1 = /* @__PURE__ */ template(`<div class=empty-state><div class=empty-state-emoji>🔒</div><p class=empty-state-title>Vault is locked</p><p class=empty-state-sub>Unlock the vault from the sidebar to view the audit log.`), _tmpl$8$1 = /* @__PURE__ */ template(`<tr class=audit-row><td></td><td><span class=op></span></td><td></td><td><code></code></td><td></td><td>`);
+var _tmpl$$3 = /* @__PURE__ */ template(`<div class="banner banner-warn">⚠️ Chain verification failed at entry <!>. The entries below are still displayed, but the chain is broken — usually because an older entry was written by an earlier version of Keepsake with a different hash function.`), _tmpl$2$3 = /* @__PURE__ */ template(`<p class=muted>Loading…`), _tmpl$3$3 = /* @__PURE__ */ template(`<div class=empty-state><div class=empty-state-emoji>⚠️</div><p class=empty-state-title>Failed to read audit log</p><p class=empty-state-sub>`), _tmpl$4$3 = /* @__PURE__ */ template(`<div class=empty-state><div class=empty-state-emoji>🛡</div><p class=empty-state-title>No audit entries yet</p><p class=empty-state-sub>Actions like unlocking the vault, adding records, and changing your password are recorded here.`), _tmpl$5$3 = /* @__PURE__ */ template(`<div class=table-wrap><table class=rows><thead><tr><th>seq</th><th>op</th><th>actor</th><th>target</th><th>details</th><th>ts</th></tr></thead><tbody>`), _tmpl$6$2 = /* @__PURE__ */ template(`<div class=page><header class=page-header><div><h1 class=page-title>🛡 Audit</h1><p class=page-sub>Append-only, hash-chained record of every change.</p></div><div class=page-actions><button class=btn>Refresh</button><button class=btn>Verify chain</button><button class="btn btn-danger">Reset chain`), _tmpl$7$1 = /* @__PURE__ */ template(`<div class=empty-state><div class=empty-state-emoji>🔒</div><p class=empty-state-title>Vault is locked</p><p class=empty-state-sub>Unlock the vault from the sidebar to view the audit log.`), _tmpl$8$1 = /* @__PURE__ */ template(`<tr class=audit-row><td></td><td><span class=op></span></td><td></td><td><code></code></td><td></td><td>`);
 function AuditPage() {
   const [refreshTick, setRefreshTick] = createSignal(0);
   const [entries2] = createResource(() => refreshTick(), async () => {
@@ -7239,7 +7268,7 @@ function AuditPage() {
   }
   const list2 = () => entries2() ?? [];
   return (() => {
-    var _el$ = _tmpl$6$1(), _el$2 = _el$.firstChild, _el$3 = _el$2.firstChild, _el$4 = _el$3.nextSibling, _el$5 = _el$4.firstChild, _el$6 = _el$5.nextSibling, _el$7 = _el$6.nextSibling;
+    var _el$ = _tmpl$6$2(), _el$2 = _el$.firstChild, _el$3 = _el$2.firstChild, _el$4 = _el$3.nextSibling, _el$5 = _el$4.firstChild, _el$6 = _el$5.nextSibling, _el$7 = _el$6.nextSibling;
     _el$5.$$click = refresh;
     _el$6.$$click = doVerify;
     _el$7.$$click = resetChain;
@@ -7318,7 +7347,7 @@ function AuditPage() {
   })();
 }
 delegateEvents(["click"]);
-var _tmpl$$2 = /* @__PURE__ */ template(`<div class=page><header class=page-header><div><h1 class=page-title>Settings</h1><p class=page-sub>Vault, security, and backup.`), _tmpl$2$2 = /* @__PURE__ */ template(`<span class="badge accent">`), _tmpl$3$2 = /* @__PURE__ */ template(`<div class=settings-section><h2>Vault</h2><dl class=dl><dt>Path</dt><dd><code></code></dd><dt>Current user</dt><dd>`), _tmpl$4$2 = /* @__PURE__ */ template(`<div class=form-actions style=border-top:none;padding-top:0><button class="btn btn-primary">⤓ Export vault</button><button class=btn>⤒ Import bundle`), _tmpl$5$2 = /* @__PURE__ */ template(`<div class=form-field><label>bundle (copy this and save somewhere safe)</label><textarea rows=6 readonly>`), _tmpl$6 = /* @__PURE__ */ template(`<form class=backup-form><div class=form-field><label>export passphrase</label><input type=password placeholder="A long, written-down string"required></div><div class=form-field><label>confirm</label><input type=password required></div><div class=form-actions><button type=submit class="btn btn-primary"></button><button type=button class="btn btn-ghost">Cancel`), _tmpl$7 = /* @__PURE__ */ template(`<form class=backup-form><div class=form-field><label>bundle passphrase</label><input type=password required></div><div class=form-field><label>bundle bytes (JSON array)</label><textarea rows=6 placeholder="Paste the [12, 34, 56, ...] array from your export"required></textarea></div><div class=form-actions><button type=submit class="btn btn-primary"></button><button type=button class="btn btn-ghost">Cancel`), _tmpl$8 = /* @__PURE__ */ template(`<div class=settings-section id=export><h2>Backup</h2><p class=muted-small style="margin:0 0 0.75rem 0">Export the entire vault to an encrypted <code>.ksk</code> bundle. The bundle is sealed under a passphrase you choose — it can be different from your daily password. Save the bundle to offline media for recovery.`), _tmpl$9 = /* @__PURE__ */ template(`<button class=btn>+ Add user`), _tmpl$0 = /* @__PURE__ */ template(`<form class=add-user-form><div class=form-field><label>username</label><input placeholder="e.g. dahlia"required></div><div class=form-field><label>password</label><input type=password placeholder="strong password"required></div><div class=form-actions><button type=submit class="btn btn-primary"></button><button type=button class="btn btn-ghost">Cancel`), _tmpl$1 = /* @__PURE__ */ template(`<ul class=user-list>`), _tmpl$10 = /* @__PURE__ */ template(`<div class=settings-section><div class=settings-section-header><h2>Users on this device`), _tmpl$11 = /* @__PURE__ */ template(`<button class="btn btn-ghost">Cancel`), _tmpl$12 = /* @__PURE__ */ template(`<p class=muted>No users on this device.`), _tmpl$13 = /* @__PURE__ */ template(`<span class=muted-small style=margin-left:0.5rem>current`), _tmpl$14 = /* @__PURE__ */ template(`<button class="btn btn-ghost"title="Remove from this device">Remove`), _tmpl$15 = /* @__PURE__ */ template(`<li class=user-row><span class=user-name>`), _tmpl$16 = /* @__PURE__ */ template(`<span class=badge>`), _tmpl$17 = /* @__PURE__ */ template(`<div class=settings-section><h2>Change password</h2><p class=muted-small style="margin:0 0 1rem 0">Re-seals the vault key under a new password. The vault key itself stays the same.</p><form class=change-pw-form><div class=form-field><label>new password</label><input type=password required></div><div class=form-field><label>confirm</label><input type=password required></div><div class=form-actions><button type=submit class="btn btn-primary">`), _tmpl$18 = /* @__PURE__ */ template(`<div class=settings-section><h2>Security</h2><p style=margin:0>All data is end-to-end encrypted. The master password is the only thing protecting the vault; if you lose it, recovery requires a<code> .ksk</code> export.</p><p class=muted-small style="margin:0.5rem 0 0 0">See <code>docs/threat-model.md</code> in the source tree for the full threat model.`);
+var _tmpl$$2 = /* @__PURE__ */ template(`<div class=page><header class=page-header><div><h1 class=page-title>Settings</h1><p class=page-sub>Vault, security, and backup.`), _tmpl$2$2 = /* @__PURE__ */ template(`<span class="badge accent">`), _tmpl$3$2 = /* @__PURE__ */ template(`<div class=settings-section><h2>Vault</h2><dl class=dl><dt>Path</dt><dd><code></code></dd><dt>Current user</dt><dd>`), _tmpl$4$2 = /* @__PURE__ */ template(`<div class=form-actions style=border-top:none;padding-top:0><button class="btn btn-primary">⤓ Export vault</button><button class=btn>⤒ Import bundle`), _tmpl$5$2 = /* @__PURE__ */ template(`<div class=form-field><label>bundle (copy this and save somewhere safe)</label><textarea rows=6 readonly>`), _tmpl$6$1 = /* @__PURE__ */ template(`<form class=backup-form><div class=form-field><label>export passphrase</label><input type=password placeholder="A long, written-down string"required></div><div class=form-field><label>confirm</label><input type=password required></div><div class=form-actions><button type=submit class="btn btn-primary"></button><button type=button class="btn btn-ghost">Cancel`), _tmpl$7 = /* @__PURE__ */ template(`<form class=backup-form><div class=form-field><label>bundle passphrase</label><input type=password required></div><div class=form-field><label>bundle bytes (JSON array)</label><textarea rows=6 placeholder="Paste the [12, 34, 56, ...] array from your export"required></textarea></div><div class=form-actions><button type=submit class="btn btn-primary"></button><button type=button class="btn btn-ghost">Cancel`), _tmpl$8 = /* @__PURE__ */ template(`<div class=settings-section id=export><h2>Backup</h2><p class=muted-small style="margin:0 0 0.75rem 0">Export the entire vault to an encrypted <code>.ksk</code> bundle. The bundle is sealed under a passphrase you choose — it can be different from your daily password. Save the bundle to offline media for recovery.`), _tmpl$9 = /* @__PURE__ */ template(`<button class=btn>+ Add user`), _tmpl$0 = /* @__PURE__ */ template(`<form class=add-user-form><div class=form-field><label>username</label><input placeholder="e.g. dahlia"required></div><div class=form-field><label>password</label><input type=password placeholder="strong password"required></div><div class=form-actions><button type=submit class="btn btn-primary"></button><button type=button class="btn btn-ghost">Cancel`), _tmpl$1 = /* @__PURE__ */ template(`<ul class=user-list>`), _tmpl$10 = /* @__PURE__ */ template(`<div class=settings-section><div class=settings-section-header><h2>Users on this device`), _tmpl$11 = /* @__PURE__ */ template(`<button class="btn btn-ghost">Cancel`), _tmpl$12 = /* @__PURE__ */ template(`<p class=muted>No users on this device.`), _tmpl$13 = /* @__PURE__ */ template(`<span class=muted-small style=margin-left:0.5rem>current`), _tmpl$14 = /* @__PURE__ */ template(`<button class="btn btn-ghost"title="Remove from this device">Remove`), _tmpl$15 = /* @__PURE__ */ template(`<li class=user-row><span class=user-name>`), _tmpl$16 = /* @__PURE__ */ template(`<span class=badge>`), _tmpl$17 = /* @__PURE__ */ template(`<div class=settings-section><h2>Change password</h2><p class=muted-small style="margin:0 0 1rem 0">Re-seals the vault key under a new password. The vault key itself stays the same.</p><form class=change-pw-form><div class=form-field><label>new password</label><input type=password required></div><div class=form-field><label>confirm</label><input type=password required></div><div class=form-actions><button type=submit class="btn btn-primary">`), _tmpl$18 = /* @__PURE__ */ template(`<div class=settings-section><h2>Security</h2><p style=margin:0>All data is end-to-end encrypted. The master password is the only thing protecting the vault; if you lose it, recovery requires a<code> .ksk</code> export.</p><p class=muted-small style="margin:0.5rem 0 0 0">See <code>docs/threat-model.md</code> in the source tree for the full threat model.`);
 function Settings() {
   onMount(async () => {
     await refreshUsers();
@@ -7419,7 +7448,7 @@ function Backup() {
         return mode() === "export";
       },
       get children() {
-        var _el$16 = _tmpl$6(), _el$17 = _el$16.firstChild, _el$18 = _el$17.firstChild, _el$19 = _el$18.nextSibling, _el$20 = _el$17.nextSibling, _el$21 = _el$20.firstChild, _el$22 = _el$21.nextSibling, _el$26 = _el$20.nextSibling, _el$27 = _el$26.firstChild, _el$28 = _el$27.nextSibling;
+        var _el$16 = _tmpl$6$1(), _el$17 = _el$16.firstChild, _el$18 = _el$17.firstChild, _el$19 = _el$18.nextSibling, _el$20 = _el$17.nextSibling, _el$21 = _el$20.firstChild, _el$22 = _el$21.nextSibling, _el$26 = _el$20.nextSibling, _el$27 = _el$26.firstChild, _el$28 = _el$27.nextSibling;
         _el$16.addEventListener("submit", doExport);
         _el$19.$$input = (e) => setPass(e.currentTarget.value);
         _el$22.$$input = (e) => setConfirm(e.currentTarget.value);
@@ -7639,35 +7668,45 @@ function Security() {
   return _tmpl$18();
 }
 delegateEvents(["click", "input"]);
-var _tmpl$$1 = /* @__PURE__ */ template(`<p class=muted>Unlock the vault to use sync.`), _tmpl$2$1 = /* @__PURE__ */ template(`<div class=settings-row style=margin-top:1rem><p class=muted-small style="margin:0 0 0.5rem 0">Share these out-of-band to set up another device:</p><div class=form-field><label>vault id</label><div style=display:flex;gap:0.5rem><input type=text readonly><button type=button class=btn>Copy</button></div></div><div class=form-field><label>passphrase</label><div style=display:flex;gap:0.5rem><input type=text readonly><button type=button class=btn>Copy</button></div></div><p class=muted-small style="margin:0.5rem 0 0 0">Anyone with the vault id and passphrase can read and write every record in the vault. Treat them like a shared key.`), _tmpl$3$1 = /* @__PURE__ */ template(`<div class=settings-section><form class=form style=background:transparent;border:none;padding:0><div class=form-field><label>server base URL</label><input type=url placeholder=https://sync.example.com></div><div class=form-field><label>vault id</label><input type=text placeholder=family list=known-vault-ids><datalist id=known-vault-ids></datalist></div><div class=form-field><label>shared passphrase (only needed to set up or rotate)</label><input type=password placeholder="used to derive the shared sync key"></div><div class=form-actions><button type=submit class=btn>Save URL</button><button type=button class="btn btn-primary"></button><button type=button class=btn></button><button type=button class=btn></button></div><div class=form-actions style=margin-top:0.5rem><button type=button class=btn title="Push every local record to the server"></button><button type=button class=btn title="Pull remote changes and merge them locally">`), _tmpl$4$1 = /* @__PURE__ */ template(`<div class=page><header class=page-header><div><h1 class=page-title>⇄ Sync</h1><p class=page-sub>End-to-end-encrypted. The server stores doubly-sealed ciphertext (vault key inner, shared sync key outer). Share the vault id and passphrase out-of-band to add another device.`), _tmpl$5$1 = /* @__PURE__ */ template(`<option>`);
+var _tmpl$$1 = /* @__PURE__ */ template(`<p class=muted>Unlock the vault to use sync.`), _tmpl$2$1 = /* @__PURE__ */ template(`<div class=form-actions style=margin-top:0.5rem><button type=button class=btn title="Push every local record to the server"></button><button type=button class=btn title="Pull remote changes and merge them locally">`), _tmpl$3$1 = /* @__PURE__ */ template(`<div class=settings-row style=margin-top:1rem><p class=muted-small style="margin:0 0 0.5rem 0">Share these out-of-band to set up another device:</p><div class=form-field><label>vault id</label><div style=display:flex;gap:0.5rem><input type=text readonly><button type=button class=btn>Copy</button></div></div><div class=form-field><label>passphrase</label><div style=display:flex;gap:0.5rem><input type=text readonly><button type=button class=btn>Copy</button></div></div><p class=muted-small style="margin:0.5rem 0 0 0">Anyone with the vault id and passphrase can read and write every record in the vault. Treat them like a shared key.`), _tmpl$4$1 = /* @__PURE__ */ template(`<div class=settings-section><form class=form style=background:transparent;border:none;padding:0><div class=form-field><label>server base URL</label><input type=url placeholder=https://sync.example.com></div><div class=form-field><label>vault id</label><input type=text placeholder=family list=known-vault-ids><datalist id=known-vault-ids></datalist></div><div class=form-field><label>shared passphrase (only needed to set up or rotate)</label><input type=password placeholder="used to derive the shared sync key"></div><div class=form-actions><button type=submit class=btn>Save URL</button><button type=button class="btn btn-primary"></button><button type=button class=btn></button><button type=button class=btn>`), _tmpl$5$1 = /* @__PURE__ */ template(`<div class=page><header class=page-header><div><h1 class=page-title>⇄ Sync</h1><p class=page-sub>End-to-end-encrypted. The server stores doubly-sealed ciphertext (vault key inner, shared sync key outer). Share the vault id and passphrase out-of-band to add another device.`), _tmpl$6 = /* @__PURE__ */ template(`<option>`);
 function SyncPage() {
   const [url, setUrl] = createSignal(state.syncUrl());
-  const [vaultId, setVaultId] = createSignal("");
+  const [vaultId, setVaultIdRaw] = createSignal(state.syncVaultId());
   const [passphrase, setPassphrase] = createSignal("");
   const [busy, setBusy] = createSignal("");
   const [revealed, setRevealed] = createSignal(null);
+  const setVaultId = (v2) => {
+    setVaultIdRaw(v2);
+    state.setSyncVaultId(v2);
+  };
   const [syncIds, {
     refetch: refetchSyncIds
   }] = createResource(() => state.status().unlocked && state.status().username, async (unlocked) => {
     if (!unlocked) return [];
     return api.listSharedSyncs();
   });
-  function defaultVaultId() {
+  createEffect(() => {
     const ids = syncIds();
-    if (ids && ids.length > 0) return ids[0];
-    return "";
-  }
-  if (vaultId() === "" && syncIds() && syncIds().length > 0) {
-    setVaultId(syncIds()[0]);
-  }
+    if (!ids) return;
+    const current = vaultId();
+    if (current !== "" && ids.includes(current)) return;
+    if (ids.length > 0) {
+      setVaultId(ids[0]);
+    }
+  });
+  const isConfigured = () => {
+    const ids = syncIds() ?? [];
+    const v2 = vaultId();
+    return v2 !== "" && ids.includes(v2);
+  };
   async function save(e) {
     e.preventDefault();
     state.setSyncUrl(url());
     showToast("ok", "Sync URL saved");
   }
   async function push() {
-    if (!vaultId()) {
-      showToast("err", "Set up a shared sync id first");
+    if (!isConfigured()) {
+      showToast("err", "Set up shared sync for this vault id first");
       return;
     }
     setBusy("push");
@@ -7681,8 +7720,8 @@ function SyncPage() {
     }
   }
   async function pull() {
-    if (!vaultId()) {
-      showToast("err", "Set up a shared sync id first");
+    if (!isConfigured()) {
+      showToast("err", "Set up shared sync for this vault id first");
       return;
     }
     setBusy("pull");
@@ -7754,7 +7793,7 @@ function SyncPage() {
     }
   }
   return (() => {
-    var _el$ = _tmpl$4$1();
+    var _el$ = _tmpl$5$1();
     _el$.firstChild;
     insert(_el$, createComponent(Show, {
       get when() {
@@ -7769,7 +7808,7 @@ function SyncPage() {
         return state.status().unlocked;
       },
       get children() {
-        var _el$4 = _tmpl$3$1(), _el$5 = _el$4.firstChild, _el$6 = _el$5.firstChild, _el$7 = _el$6.firstChild, _el$8 = _el$7.nextSibling, _el$9 = _el$6.nextSibling, _el$0 = _el$9.firstChild, _el$1 = _el$0.nextSibling, _el$10 = _el$1.nextSibling, _el$11 = _el$9.nextSibling, _el$12 = _el$11.firstChild, _el$13 = _el$12.nextSibling, _el$14 = _el$11.nextSibling, _el$15 = _el$14.firstChild, _el$16 = _el$15.nextSibling, _el$17 = _el$16.nextSibling, _el$18 = _el$17.nextSibling, _el$19 = _el$14.nextSibling, _el$20 = _el$19.firstChild, _el$21 = _el$20.nextSibling;
+        var _el$4 = _tmpl$4$1(), _el$5 = _el$4.firstChild, _el$6 = _el$5.firstChild, _el$7 = _el$6.firstChild, _el$8 = _el$7.nextSibling, _el$9 = _el$6.nextSibling, _el$0 = _el$9.firstChild, _el$1 = _el$0.nextSibling, _el$10 = _el$1.nextSibling, _el$11 = _el$9.nextSibling, _el$12 = _el$11.firstChild, _el$13 = _el$12.nextSibling, _el$14 = _el$11.nextSibling, _el$15 = _el$14.firstChild, _el$16 = _el$15.nextSibling, _el$17 = _el$16.nextSibling, _el$18 = _el$17.nextSibling;
         _el$5.addEventListener("submit", save);
         _el$8.$$input = (e) => setUrl(e.currentTarget.value);
         _el$1.$$input = (e) => setVaultId(e.currentTarget.value);
@@ -7778,7 +7817,7 @@ function SyncPage() {
             return syncIds() ?? [];
           },
           children: (id) => (() => {
-            var _el$34 = _tmpl$5$1();
+            var _el$34 = _tmpl$6();
             _el$34.value = id;
             return _el$34;
           })()
@@ -7790,16 +7829,34 @@ function SyncPage() {
         insert(_el$17, () => busy() === "reveal" ? "…" : "Show setup");
         _el$18.$$click = deleteShared;
         insert(_el$18, () => busy() === "delete" ? "…" : "Delete");
-        _el$20.$$click = push;
-        insert(_el$20, () => busy() === "push" ? "Pushing…" : "Push");
-        _el$21.$$click = pull;
-        insert(_el$21, () => busy() === "pull" ? "Pulling…" : "Pull");
+        insert(_el$5, createComponent(Show, {
+          get when() {
+            return isConfigured();
+          },
+          get children() {
+            var _el$19 = _tmpl$2$1(), _el$20 = _el$19.firstChild, _el$21 = _el$20.nextSibling;
+            _el$20.$$click = push;
+            insert(_el$20, () => busy() === "push" ? "Pushing…" : "Push");
+            _el$21.$$click = pull;
+            insert(_el$21, () => busy() === "pull" ? "Pulling…" : "Pull");
+            createRenderEffect((_p$) => {
+              var _v$ = busy() !== "", _v$2 = busy() !== "";
+              _v$ !== _p$.e && (_el$20.disabled = _p$.e = _v$);
+              _v$2 !== _p$.t && (_el$21.disabled = _p$.t = _v$2);
+              return _p$;
+            }, {
+              e: void 0,
+              t: void 0
+            });
+            return _el$19;
+          }
+        }), null);
         insert(_el$4, createComponent(Show, {
           get when() {
             return revealed();
           },
           get children() {
-            var _el$22 = _tmpl$2$1(), _el$23 = _el$22.firstChild, _el$24 = _el$23.nextSibling, _el$25 = _el$24.firstChild, _el$26 = _el$25.nextSibling, _el$27 = _el$26.firstChild, _el$28 = _el$27.nextSibling, _el$29 = _el$24.nextSibling, _el$30 = _el$29.firstChild, _el$31 = _el$30.nextSibling, _el$32 = _el$31.firstChild, _el$33 = _el$32.nextSibling;
+            var _el$22 = _tmpl$3$1(), _el$23 = _el$22.firstChild, _el$24 = _el$23.nextSibling, _el$25 = _el$24.firstChild, _el$26 = _el$25.nextSibling, _el$27 = _el$26.firstChild, _el$28 = _el$27.nextSibling, _el$29 = _el$24.nextSibling, _el$30 = _el$29.firstChild, _el$31 = _el$30.nextSibling, _el$32 = _el$31.firstChild, _el$33 = _el$32.nextSibling;
             _el$28.$$click = () => copyToClipboard(revealed()[0]);
             _el$33.$$click = () => copyToClipboard(revealed()[1]);
             createRenderEffect(() => _el$27.value = revealed()[0]);
@@ -7808,21 +7865,17 @@ function SyncPage() {
           }
         }), null);
         createRenderEffect((_p$) => {
-          var _v$ = busy() !== "", _v$2 = busy() !== "" || !vaultId() || !passphrase(), _v$3 = busy() !== "" || !vaultId(), _v$4 = busy() !== "" || !vaultId(), _v$5 = busy() !== "" || !vaultId() || defaultVaultId() === "", _v$6 = busy() !== "" || !vaultId() || defaultVaultId() === "";
-          _v$ !== _p$.e && (_el$15.disabled = _p$.e = _v$);
-          _v$2 !== _p$.t && (_el$16.disabled = _p$.t = _v$2);
-          _v$3 !== _p$.a && (_el$17.disabled = _p$.a = _v$3);
-          _v$4 !== _p$.o && (_el$18.disabled = _p$.o = _v$4);
-          _v$5 !== _p$.i && (_el$20.disabled = _p$.i = _v$5);
-          _v$6 !== _p$.n && (_el$21.disabled = _p$.n = _v$6);
+          var _v$3 = busy() !== "", _v$4 = busy() !== "" || !vaultId() || !passphrase(), _v$5 = busy() !== "" || !vaultId(), _v$6 = busy() !== "" || !vaultId();
+          _v$3 !== _p$.e && (_el$15.disabled = _p$.e = _v$3);
+          _v$4 !== _p$.t && (_el$16.disabled = _p$.t = _v$4);
+          _v$5 !== _p$.a && (_el$17.disabled = _p$.a = _v$5);
+          _v$6 !== _p$.o && (_el$18.disabled = _p$.o = _v$6);
           return _p$;
         }, {
           e: void 0,
           t: void 0,
           a: void 0,
-          o: void 0,
-          i: void 0,
-          n: void 0
+          o: void 0
         });
         createRenderEffect(() => _el$8.value = url());
         createRenderEffect(() => _el$1.value = vaultId());
@@ -7958,4 +8011,4 @@ export {
   Resource as R,
   invoke as i
 };
-//# sourceMappingURL=index-46Lt7dah.js.map
+//# sourceMappingURL=index-D9qR0rlf.js.map

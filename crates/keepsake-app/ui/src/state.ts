@@ -16,7 +16,41 @@ const [vaultPath, setVaultPath] = createSignal<string>("");
 
 const [users, setUsers] = createSignal<string[]>([]);
 
-const [syncUrl, setSyncUrl] = createSignal<string>("");
+function persistedSignal<T extends string>(
+  key: string,
+  initial: T,
+): [() => T, (v: T) => void] {
+  let starting: T = initial;
+  try {
+    if (typeof localStorage !== "undefined") {
+      const stored = localStorage.getItem(key);
+      if (stored !== null) starting = stored as T;
+    }
+  } catch {
+    // localStorage may be disabled (private mode, etc.) —
+    // fall back to the initial value.
+  }
+  const [get, set] = createSignal<T>(starting, { equals: false });
+  return [
+    get,
+    (v: T) => {
+      set(() => v);
+      try {
+        if (typeof localStorage !== "undefined") {
+          localStorage.setItem(key, v);
+        }
+      } catch {
+        // ignore: best effort
+      }
+    },
+  ];
+}
+
+const [syncUrl, setSyncUrl] = persistedSignal<string>("keepsake.syncUrl", "");
+const [syncVaultId, setSyncVaultId] = persistedSignal<string>(
+  "keepsake.syncVaultId",
+  "",
+);
 
 const [toast, setToast] = createSignal<{ kind: "ok" | "err"; text: string } | null>(null);
 
@@ -53,6 +87,8 @@ export const state = {
   setUsers,
   syncUrl,
   setSyncUrl,
+  syncVaultId,
+  setSyncVaultId,
   toast,
   setToast,
 };

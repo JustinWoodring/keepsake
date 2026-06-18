@@ -188,7 +188,9 @@ async fn sync_push(
     server_url: String,
     vault_id: String,
 ) -> Result<usize, String> {
-    session::sync_push(&state, server_url, vault_id).map_err(|e| e.to_string())
+    session::sync_push(&state, server_url, vault_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Pull changes from the sync server and apply them locally.
@@ -199,7 +201,9 @@ async fn sync_pull(
     server_url: String,
     vault_id: String,
 ) -> Result<usize, String> {
-    session::sync_pull(&state, server_url, vault_id).map_err(|e| e.to_string())
+    session::sync_pull(&state, server_url, vault_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Set up (or rotate) the shared sync setup for `vault_id`.

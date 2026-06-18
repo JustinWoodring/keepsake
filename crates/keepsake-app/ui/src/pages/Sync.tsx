@@ -1,18 +1,24 @@
-import { Show, createResource, createSignal, For } from "solid-js";
+import { Show, createEffect, createResource, createSignal, For } from "solid-js";
 import { state, showToast } from "../state";
 import { api } from "../api";
 
 export function SyncPage() {
   const [url, setUrl] = createSignal(state.syncUrl());
-  const [vaultId, setVaultId] = createSignal("");
+  const [vaultId, setVaultIdRaw] = createSignal(state.syncVaultId());
   const [passphrase, setPassphrase] = createSignal("");
   const [busy, setBusy] = createSignal<
     "" | "push" | "pull" | "setup" | "reveal" | "delete"
   >("");
   const [revealed, setRevealed] = createSignal<[string, string] | null>(null);
 
+  // Wrapper that mirrors vaultId to localStorage.
+  const setVaultId = (v: string) => {
+    setVaultIdRaw(v);
+    state.setSyncVaultId(v);
+  };
+
   // List of configured shared-sync vault ids.  Refreshed
-  // after every setup/reveal/delete.
+  // after every setup/delete.
   const [syncIds, { refetch: refetchSyncIds }] = createResource(
     () => state.status().unlocked && state.status().username,
     async (unlocked) => {
@@ -21,19 +27,27 @@ export function SyncPage() {
     },
   );
 
-  // Default the vault id input to the first configured one
-  // (or the saved syncUrl's last path segment as a
-  // convenience for first-time users).
-  function defaultVaultId() {
+  // Reactive: if the user has not typed anything yet and we
+  // have a list of known vault ids, fill the input with the
+  // persisted choice if it's still valid, otherwise the
+  // first one in the list.
+  createEffect(() => {
     const ids = syncIds();
-    if (ids && ids.length > 0) return ids[0];
-    return "";
-  }
-  // Initialize the vault id input on first render after the
-  // resource resolves.
-  if (vaultId() === "" && syncIds() && syncIds()!.length > 0) {
-    setVaultId(syncIds()![0]);
-  }
+    if (!ids) return;
+    const current = vaultId();
+    if (current !== "" && ids.includes(current)) return;
+    if (ids.length > 0) {
+      setVaultId(ids[0]);
+    }
+  });
+
+  // True iff the current vaultId has a configured shared
+  // sync setup.  Drives the visibility of Push/Pull.
+  const isConfigured = () => {
+    const ids = syncIds() ?? [];
+    const v = vaultId();
+    return v !== "" && ids.includes(v);
+  };
 
   async function save(e: Event) {
     e.preventDefault();
@@ -42,8 +56,8 @@ export function SyncPage() {
   }
 
   async function push() {
-    if (!vaultId()) {
-      showToast("err", "Set up a shared sync id first");
+    if (!isConfigured()) {
+      showToast("err", "Set up shared sync for this vault id first");
       return;
     }
     setBusy("push");
@@ -58,8 +72,8 @@ export function SyncPage() {
   }
 
   async function pull() {
-    if (!vaultId()) {
-      showToast("err", "Set up a shared sync id first");
+    if (!isConfigured()) {
+      showToast("err", "Set up shared sync for this vault id first");
       return;
     }
     setBusy("pull");
@@ -221,26 +235,28 @@ export function SyncPage() {
                 {busy() === "delete" ? "…" : "Delete"}
               </button>
             </div>
-            <div class="form-actions" style="margin-top: 0.5rem">
-              <button
-                type="button"
-                class="btn"
-                onClick={push}
-                disabled={busy() !== "" || !vaultId() || defaultVaultId() === ""}
-                title="Push every local record to the server"
-              >
-                {busy() === "push" ? "Pushing…" : "Push"}
-              </button>
-              <button
-                type="button"
-                class="btn"
-                onClick={pull}
-                disabled={busy() !== "" || !vaultId() || defaultVaultId() === ""}
-                title="Pull remote changes and merge them locally"
-              >
-                {busy() === "pull" ? "Pulling…" : "Pull"}
-              </button>
-            </div>
+            <Show when={isConfigured()}>
+              <div class="form-actions" style="margin-top: 0.5rem">
+                <button
+                  type="button"
+                  class="btn"
+                  onClick={push}
+                  disabled={busy() !== ""}
+                  title="Push every local record to the server"
+                >
+                  {busy() === "push" ? "Pushing…" : "Push"}
+                </button>
+                <button
+                  type="button"
+                  class="btn"
+                  onClick={pull}
+                  disabled={busy() !== ""}
+                  title="Pull remote changes and merge them locally"
+                >
+                  {busy() === "pull" ? "Pulling…" : "Pull"}
+                </button>
+              </div>
+            </Show>
           </form>
 
           <Show when={revealed()}>

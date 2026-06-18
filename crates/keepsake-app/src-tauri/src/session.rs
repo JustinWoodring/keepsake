@@ -270,32 +270,45 @@ pub fn rewrite_audit_chain(state: &AppState) -> Result<usize> {
 /// the number of records pushed.  The shared sync key for
 /// `vault_id` must already be set up via
 /// [`setup_shared_sync`].
-pub fn sync_push(
+pub async fn sync_push(
     state: &AppState,
     server_url: String,
     vault_id: String,
 ) -> Result<usize> {
-    let mut guard = state.session.lock();
-    let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
-    let client = keepsake_core::sync::client::SyncClient::new(server_url, vault_id);
-    tokio::runtime::Handle::current()
-        .block_on(client.push(session))
+    // The Tauri command runs on a tokio worker thread, so
+    // we can't call `Handle::current().block_on(...)` here
+    // (it would try to drive the runtime from inside the
+    // runtime).  Move the work to a blocking thread, where
+    // `block_on` is safe.
+    let session_arc = state.session.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut guard = session_arc.lock();
+        let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
+        let client = keepsake_core::sync::client::SyncClient::new(server_url, vault_id);
+        tokio::runtime::Handle::current().block_on(client.push(session))
+    })
+    .await
+    .map_err(|e| keepsake_core::Error::Transport(format!("sync_push join: {e}")))?
 }
 
 /// Pull all remote records and apply them locally.  Returns
 /// the number of changes applied.  The shared sync key for
 /// `vault_id` must already be set up via
 /// [`setup_shared_sync`].
-pub fn sync_pull(
+pub async fn sync_pull(
     state: &AppState,
     server_url: String,
     vault_id: String,
 ) -> Result<usize> {
-    let mut guard = state.session.lock();
-    let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
-    let client = keepsake_core::sync::client::SyncClient::new(server_url, vault_id);
-    tokio::runtime::Handle::current()
-        .block_on(client.pull(session))
+    let session_arc = state.session.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut guard = session_arc.lock();
+        let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
+        let client = keepsake_core::sync::client::SyncClient::new(server_url, vault_id);
+        tokio::runtime::Handle::current().block_on(client.pull(session))
+    })
+    .await
+    .map_err(|e| keepsake_core::Error::Transport(format!("sync_pull join: {e}")))?
 }
 
 /// Set up (or rotate) the shared sync setup for `vault_id`.
