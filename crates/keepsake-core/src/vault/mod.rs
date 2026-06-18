@@ -513,6 +513,18 @@ impl Vault {
     }
 
     /// List vault_ids that have a sync setup on this device.
+    pub fn get_shared_sync_vault_id(&self) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT vault_id FROM shared_sync_keys LIMIT 1",
+        )?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn list_shared_syncs(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT vault_id FROM shared_sync_keys ORDER BY vault_id"

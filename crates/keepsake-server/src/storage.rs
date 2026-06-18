@@ -150,6 +150,21 @@ impl Storage {
                 ciphertext BLOB    NOT NULL,
                 PRIMARY KEY (vault_id, sha256)
             );
+            CREATE TABLE IF NOT EXISTS vault_sealed_keys (
+                vault_id          TEXT NOT NULL,
+                username         TEXT NOT NULL,
+                -- Each user's sealed_keys row, copied from the
+                -- local vault verbatim (no derivation, no
+                -- shared-key wrapping of the row content).  The
+                -- server only knows ciphertext.
+                kdf_salt         BLOB NOT NULL,
+                kdf_params       BLOB NOT NULL,
+                seal_nonce       BLOB NOT NULL,
+                seal_ciphertext  BLOB NOT NULL,
+                envelope_pk      BLOB NOT NULL,
+                created_at       INTEGER NOT NULL,
+                PRIMARY KEY (vault_id, username)
+            );
             "#,
         )?;
         Ok(())
@@ -340,6 +355,82 @@ impl Storage {
             )
             .optional()?;
         Ok(row)
+    }
+
+    // -- vault_sealed_keys -----------------------------------------------------
+
+    /// Upload a user's `sealed_keys` row to the server.  This
+    /// is the row verbatim from the local `sealed_keys`
+    /// table — server stores it without ever seeing the
+    /// `vault_key` or the `master_key`.  Last writer wins
+    /// per `(vault_id, username)`.
+    pub fn put_sealed_key_row(
+        &self,
+        vault_id: &str,
+        row: &keepsake_core::vault::SealedKeyRow,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO vault_sealed_keys
+                (vault_id, username, kdf_salt, kdf_params,
+                 seal_nonce, seal_ciphertext, envelope_pk, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                vault_id,
+                row.username,
+                row.kdf_salt.to_vec(),
+                row.kdf_params.clone(),
+                row.seal_nonce.to_vec(),
+                row.seal_ciphertext.clone(),
+                row.envelope_pk.to_vec(),
+                row.created_at.timestamp(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch every user's `sealed_keys` row for `vault_id`.
+    pub fn list_sealed_key_rows(
+        &self,
+        vault_id: &str,
+    ) -> Result<Vec<keepsake_core::vault::SealedKeyRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT username, kdf_salt, kdf_params,
+                    seal_nonce, seal_ciphertext, envelope_pk, created_at
+             FROM vault_sealed_keys
+             WHERE vault_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![vault_id], |r| {
+            let username: String = r.get(0)?;
+            let kdf_salt: Vec<u8> = r.get(1)?;
+            let kdf_params: Vec<u8> = r.get(2)?;
+            let seal_nonce: Vec<u8> = r.get(3)?;
+            let seal_ciphertext: Vec<u8> = r.get(4)?;
+            let envelope_pk: Vec<u8> = r.get(5)?;
+            let created_at: i64 = r.get(6)?;
+            let kdf_salt_arr: [u8; 16] = kdf_salt.try_into()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let seal_nonce_arr: [u8; 24] = seal_nonce.try_into()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let envelope_pk_arr: [u8; 32] = envelope_pk.try_into()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let ts = chrono::DateTime::<chrono::Utc>::from_timestamp(created_at, 0)
+                .ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+            Ok(keepsake_core::vault::SealedKeyRow {
+                username,
+                device_id: [0u8; 16],  // legacy field; not used
+                kdf_salt: kdf_salt_arr,
+                kdf_params,
+                seal_nonce: seal_nonce_arr,
+                seal_ciphertext,
+                envelope_pk: envelope_pk_arr,
+                created_at: ts,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 }
 

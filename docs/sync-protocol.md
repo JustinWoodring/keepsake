@@ -449,3 +449,76 @@ under each `master_key` instead of under the `vault_key`.
 This trades convenience (any user can reveal) for
 isolation (only the user who set it up can reveal).  We
 chose the convenient option for v1.
+
+## Design invariants — DO NOT VIOLATE
+
+These are hard rules of the protocol.  Before changing any
+of them, write a doc explaining why and get review.
+
+### INV-1: `vault_key` is stored ONLY in the local vault.
+
+The `vault_key` is generated locally at vault init as 32
+random bytes and sealed inside `sealed_keys` against each
+user's `master_key`.  It is **never** serialized, exported,
+re-derived from a passphrase, or transmitted to the server
+in any form.  All cross-device crypto derives from the
+existing `master_key → vault_key` chain — not from any
+synthesized "vault passphrase" or "shared secret".
+
+If a feature seems to require the `vault_key` to leave the
+device, that feature is mis-designed.  Find a way that uses
+the existing `sealed_keys` table instead.
+
+### INV-2: Cross-device sync reuses the existing user/password chain.
+
+There is no "register device" flow and no out-of-band
+shared secret required to add a device.  A new device joins
+the sync group exactly the same way a new user joins the
+local vault: it must already have (or be assigned) a user
+account in the vault, and it must know that user's password.
+
+The flow on a fresh device:
+
+1. The new user already exists in the vault (was added on
+   another device).
+2. Their `sealed_keys` row (sealed under their `master_key`)
+   is uploaded to the server the first time sync is set up
+   (and on every new user addition).
+3. The new device downloads the `sealed_keys` blob from
+   the server, derives `master_key` from the user's
+   password, unseals the `vault_key`, and uses it for
+   their local vault.
+4. **No passphrase exchange.  No key export.  No
+   derivation from a shared secret.**  Just the existing
+   password.
+
+The user types their own password.  That's how it works
+locally; that's how it works on a new device.
+
+### INV-3: The server never holds plaintext keys.
+
+The server sees only ciphertext.  The `vault_key` is
+sealed under `master_key` (a per-user key Bob and Alice
+never share with the server).  Records are sealed under
+`vault_key`.  The wire envelope wraps records under
+`shared_sync_key` (a separate derivation, distinct from
+any key that decrypts the records).
+
+The server can be compromised and leak only ciphertext.
+Breaking the wire seal requires the user's `shared_sync_key`
+which the server doesn't have.  Breaking the inner seal
+requires the user's `vault_key` which the server doesn't
+have.  These are independent, separately-rotatable secrets.
+
+### INV-4: `shared_sync_key` is for the wire, NOT the master.
+
+`shared_sync_key` derives from the sync passphrase and
+wraps records for transit.  It is **not** the key that
+protects the on-disk vault.  **Do not** use `shared_sync_key`
+to encrypt or decrypt anything stored in the local vault.
+**Do not** publish the `vault_key` (or any device-local key)
+under `shared_sync_key`.
+
+If you find yourself wanting to "publish the vault_key to
+the server" so new devices can pull it, **stop**.  The right
+answer is INV-2: ship the `sealed_keys` rows.

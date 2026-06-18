@@ -14,6 +14,15 @@
 //!                                     empty) or a change feed
 //! * `PUT  /v1/vaults/:id/blobs/:sha256` — body is ciphertext
 //! * `GET  /v1/vaults/:id/blobs/:sha256` — returns ciphertext
+//! * `PUT  /v1/vaults/:id/sealed-keys` — body is a single
+//!                                     `SealedKeyRow` for one
+//!                                     user (verbatim from the
+//!                                     local `sealed_keys`
+//!                                     table).  Last writer
+//!                                     wins per `(vault_id,
+//!                                     username)`.
+//! * `GET  /v1/vaults/:id/sealed-keys` — returns every user's
+//!                                     row as `SealedKeysListResp`
 
 use std::sync::Arc;
 
@@ -26,8 +35,64 @@ use axum::{
     Json, Router,
 };
 use keepsake_core::sync::protocol::{Request as ProtoRequest, Response as ProtoResponse};
+use serde::{Deserialize, Serialize};
 
 use crate::storage::{StateRow, Storage};
+
+/// One row in the `sealed_keys` table, mirrored from the
+/// local vault to the server.  The server stores it
+/// verbatim; only the originating user (and any user who
+/// knows their password) can unseal the `vault_key` it
+/// contains.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SealedKeyRowWire {
+    pub username: String,
+    pub kdf_salt: [u8; 16],
+    pub kdf_params: Vec<u8>,
+    pub seal_nonce: [u8; 24],
+    pub seal_ciphertext: Vec<u8>,
+    pub envelope_pk: [u8; 32],
+    pub created_at: i64,
+}
+
+impl From<keepsake_core::vault::SealedKeyRow> for SealedKeyRowWire {
+    fn from(r: keepsake_core::vault::SealedKeyRow) -> Self {
+        Self {
+            username: r.username,
+            kdf_salt: r.kdf_salt,
+            kdf_params: r.kdf_params,
+            seal_nonce: r.seal_nonce,
+            seal_ciphertext: r.seal_ciphertext,
+            envelope_pk: r.envelope_pk,
+            created_at: r.created_at.timestamp(),
+        }
+    }
+}
+
+impl TryFrom<SealedKeyRowWire> for keepsake_core::vault::SealedKeyRow {
+    type Error = keepsake_core::Error;
+    fn try_from(w: SealedKeyRowWire) -> keepsake_core::Result<Self> {
+        let ts = chrono::DateTime::<chrono::Utc>::from_timestamp(w.created_at, 0)
+            .ok_or_else(|| keepsake_core::Error::Invalid(
+                "bad sealed_keys timestamp".into(),
+            ))?;
+        Ok(Self {
+            username: w.username,
+            device_id: [0u8; 16],  // legacy field, ignored
+            kdf_salt: w.kdf_salt,
+            kdf_params: w.kdf_params,
+            seal_nonce: w.seal_nonce,
+            seal_ciphertext: w.seal_ciphertext,
+            envelope_pk: w.envelope_pk,
+            created_at: ts,
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SealedKeysListResp {
+    pub rows: Vec<SealedKeyRowWire>,
+}
 
 /// App state shared across all routes.
 pub struct AppState {
@@ -56,6 +121,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/v1/vaults/:id/blobs/:sha256",
             put(put_blob).get(get_blob),
+        )
+        .route(
+            "/v1/vaults/:id/sealed-keys",
+            put(put_sealed_keys).get(get_sealed_keys),
         )
         .with_state(state)
 }
@@ -237,6 +306,30 @@ async fn get_blob(
     let ciphertext = storage.get_blob(&vault_id, &sha256)?
         .ok_or_else(|| ApiError::bad_request("blob not found"))?;
     Ok(Json(ProtoResponse::BlobResp { ciphertext }))
+}
+
+async fn put_sealed_keys(
+    State(state): State<Arc<AppState>>,
+    Path(vault_id): Path<String>,
+    body: Bytes,
+) -> Result<Json<ProtoResponse>, ApiError> {
+    validate_vault_id(&vault_id)?;
+    let req: SealedKeyRowWire = serde_json::from_slice(&body)
+        .map_err(|e| ApiError::bad_request(format!("body parse: {e}")))?;
+    let row = keepsake_core::vault::SealedKeyRow::try_from(req)
+        .map_err(|e| ApiError::bad_request(format!("bad row: {e}")))?;
+    state.storage.lock().put_sealed_key_row(&vault_id, &row)?;
+    Ok(Json(ProtoResponse::Ok { message: Some("stored".into()) }))
+}
+
+async fn get_sealed_keys(
+    State(state): State<Arc<AppState>>,
+    Path(vault_id): Path<String>,
+) -> Result<Json<SealedKeysListResp>, ApiError> {
+    validate_vault_id(&vault_id)?;
+    let rows = state.storage.lock().list_sealed_key_rows(&vault_id)?;
+    let rows = rows.into_iter().map(SealedKeyRowWire::from).collect();
+    Ok(Json(SealedKeysListResp { rows }))
 }
 
 // -- helpers ---------------------------------------------------------------

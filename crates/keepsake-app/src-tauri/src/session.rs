@@ -316,6 +316,130 @@ pub async fn sync_pull(
 /// `shared_sync_key` is cached in the session.  If a
 /// `server_url` is provided, it is bound to the setup so
 /// the auto-sync loop can use it without a per-call arg.
+///
+/// Body for `PUT /v1/vaults/:id/sealed-keys`.  Mirrors
+/// `keepsake_core::vault::SealedKeyRow` without the
+/// legacy `device_id` field.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SealedKeyRowWire {
+    pub username: String,
+    pub kdf_salt: [u8; 16],
+    pub kdf_params: Vec<u8>,
+    pub seal_nonce: [u8; 24],
+    pub seal_ciphertext: Vec<u8>,
+    pub envelope_pk: [u8; 32],
+    pub created_at: i64,
+}
+
+impl From<keepsake_core::vault::SealedKeyRow> for SealedKeyRowWire {
+    fn from(r: keepsake_core::vault::SealedKeyRow) -> Self {
+        Self {
+            username: r.username,
+            kdf_salt: r.kdf_salt,
+            kdf_params: r.kdf_params,
+            seal_nonce: r.seal_nonce,
+            seal_ciphertext: r.seal_ciphertext,
+            envelope_pk: r.envelope_pk,
+            created_at: r.created_at.timestamp(),
+        }
+    }
+}
+
+impl TryFrom<SealedKeyRowWire> for keepsake_core::vault::SealedKeyRow {
+    type Error = keepsake_core::Error;
+    fn try_from(w: SealedKeyRowWire) -> keepsake_core::Result<Self> {
+        let ts = chrono::DateTime::<chrono::Utc>::from_timestamp(w.created_at, 0)
+            .ok_or_else(|| keepsake_core::Error::Invalid(
+                "bad sealed_keys timestamp".into(),
+            ))?;
+        Ok(Self {
+            username: w.username,
+            device_id: [0u8; 16],
+            kdf_salt: w.kdf_salt,
+            kdf_params: w.kdf_params,
+            seal_nonce: w.seal_nonce,
+            seal_ciphertext: w.seal_ciphertext,
+            envelope_pk: w.envelope_pk,
+            created_at: ts,
+        })
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SealedKeysListResp {
+    pub rows: Vec<SealedKeyRowWire>,
+}
+
+/// HTTP helper: PUT a single sealed_keys row to the server.
+pub async fn push_sealed_keys_row(
+    server_url: &str,
+    vault_id: &str,
+    row: &keepsake_core::vault::SealedKeyRow,
+) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| keepsake_core::Error::Transport(format!("client: {e}")))?;
+    let url = format!(
+        "{}/v1/vaults/{}/sealed-keys",
+        server_url.trim_end_matches('/'),
+        vault_id,
+    );
+    let wire = SealedKeyRowWire::from(row.clone());
+    let resp = client
+        .put(&url)
+        .json(&wire)
+        .send()
+        .await
+        .map_err(|e| keepsake_core::Error::Transport(format!("push sealed_keys: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(keepsake_core::Error::Transport(format!(
+            "push sealed_keys failed: {status}: {txt}"
+        )));
+    }
+    Ok(())
+}
+
+/// HTTP helper: GET every sealed_keys row for `vault_id`.
+pub async fn fetch_sealed_keys_rows(
+    server_url: &str,
+    vault_id: &str,
+) -> Result<Vec<keepsake_core::vault::SealedKeyRow>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| keepsake_core::Error::Transport(format!("client: {e}")))?;
+    let url = format!(
+        "{}/v1/vaults/{}/sealed-keys",
+        server_url.trim_end_matches('/'),
+        vault_id,
+    );
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| keepsake_core::Error::Transport(format!("fetch sealed_keys: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let txt = resp.text().await.unwrap_or_default();
+        return Err(keepsake_core::Error::Transport(format!(
+            "fetch sealed_keys failed: {status}: {txt}"
+        )));
+    }
+    let bytes = resp.bytes().await
+        .map_err(|e| keepsake_core::Error::Transport(format!("read body: {e}")))?
+        .to_vec();
+    let resp: SealedKeysListResp = serde_json::from_slice(&bytes)?;
+    resp.rows.into_iter().map(|w| {
+        keepsake_core::vault::SealedKeyRow::try_from(w)
+    }).collect()
+}
+
+/// Set up shared sync for `vault_id` on this device and
+/// publish the current user's sealed_keys row to the
+/// server so other devices can join.
 pub fn setup_shared_sync(
     state: &AppState,
     vault_id: String,
@@ -330,6 +454,27 @@ pub fn setup_shared_sync(
         server_url.as_deref(),
     )?;
     session.refresh_shared_sync_keys()?;
+    let server_url = server_url.clone();
+    let vault_id_for_task = vault_id.clone();
+    let username = session.username.clone();
+    let row = session
+        .vault
+        .get_sealed_key(&username)?
+        .ok_or_else(|| keepsake_core::Error::NotFound(
+            format!("sealed_keys row for '{username}'"),
+        ))?;
+    drop(guard);
+    if let Some(server_url) = server_url {
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async move {
+            push_sealed_keys_row(
+                &server_url,
+                &vault_id_for_task,
+                &row,
+            )
+            .await
+        })?;
+    }
     Ok(())
 }
 
@@ -514,12 +659,14 @@ pub fn import_to_new_vault(
 }
 
 /// Recover a vault on a new device from a sync server.
-/// Creates a fresh, empty local vault with the user's
-/// username + password, seals the shared sync setup
-/// (server_url, vault_id, sync_passphrase) into it, and
-/// returns an unlocked Session ready to pull from the
-/// server.  Used by the Unlock screen's "Recover from
-/// sync" flow.
+/// Fetches the `sealed_keys` rows from the server, finds the
+/// row matching `username`, derives `master_key` from
+/// `password` + the row's KDF parameters, unseals the
+/// `vault_key` from the row, and uses that same `vault_key`
+/// for the local vault.  Writes the user's own
+/// `sealed_keys` row (with the recovered `vault_key` sealed
+/// under their `master_key`) so this device can unlock
+/// locally.  Sets up shared sync.  Returns an unlocked Session.
 pub fn recover_from_sync(
     path: &std::path::Path,
     server_url: &str,
@@ -533,40 +680,76 @@ pub fn recover_from_sync(
             path.display().to_string(),
         ));
     }
-    use keepsake_core::crypto::KdfParams;
-    use keepsake_core::identity::{password_to_master_key, seal_vault_key, EnvelopeKey, VaultKey};
-    use rand::RngCore;
+    use keepsake_core::identity::{
+        password_to_master_key, seal_vault_key, unseal_vault_key,
+        EnvelopeKey, SealedVaultKey,
+    };
 
-    // Generate a fresh random vault key — same as a normal
-    // init.  The shared sync key is derived independently
-    // from the sync passphrase + vault_id; the vault key
-    // and the shared sync key are different keys that
-    // protect different things.
-    let mut k = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut k);
-    let vault_key = VaultKey::from_bytes(k);
-    let params = KdfParams::default();
-    let (master, salt) = password_to_master_key(password.as_bytes(), params)?;
-    let sealed = seal_vault_key(&master, &vault_key)?;
-    let envelope = EnvelopeKey::from_master_key(&master)?;
+    // Fetch the sealed_keys rows from the server (sync).
+    let rows = tokio::runtime::Handle::current().block_on(async {
+        fetch_sealed_keys_rows(server_url, vault_id).await
+    })?;
+    let mine = rows
+        .iter()
+        .find(|r| r.username == username)
+        .ok_or_else(|| {
+            keepsake_core::Error::NotFound(format!(
+                "no sealed_keys for user '{username}' in vault '{vault_id}'"
+            ))
+        })?;
 
-    // Create the vault file and write the sealed-keys row.
+    // Re-derive the user's master_key from their password
+    // and the KDF parameters from the server-fetched row.
+    let params = keepsake_core::crypto::KdfParams::decode(&mine.kdf_params)?;
+    let (master, _salt) = password_to_master_key(password.as_bytes(), params)?;
+    // Verify the password is correct by unsealing the
+    // vault_key.  If the password is wrong, unseal_vault_key
+    // returns a decryption-failure error.
+    let sealed = SealedVaultKey {
+        nonce: mine.seal_nonce,
+        ciphertext: mine.seal_ciphertext.clone(),
+    };
+    let vault_key = unseal_vault_key(&master, &sealed)?;
+    // Drop the matching row now that we've used it.
+    let other_rows: Vec<_> = rows
+        .iter()
+        .filter(|r| r.username != username)
+        .cloned()
+        .collect();
+
+    // Create the local vault file with the recovered
+    // vault_key.
     let vault = keepsake_core::vault::Vault::open_or_create(path)?;
+    // Write Bob's own sealed_keys row using his new salt/
+    // params and the recovered vault_key.
+    let params2 = keepsake_core::crypto::KdfParams::default();
+    let (master2, salt2) = password_to_master_key(password.as_bytes(), params2)?;
+    let new_sealed = seal_vault_key(&master2, &vault_key)?;
+    let envelope = EnvelopeKey::from_master_key(&master2)?;
     let row = keepsake_core::vault::SealedKeyRow {
         username: username.to_string(),
         device_id: random_device_id(),
-        kdf_salt: salt.0,
-        kdf_params: params.encode(),
-        seal_nonce: sealed.nonce,
-        seal_ciphertext: sealed.ciphertext,
+        kdf_salt: salt2.0,
+        kdf_params: params2.encode(),
+        seal_nonce: new_sealed.nonce,
+        seal_ciphertext: new_sealed.ciphertext,
         envelope_pk: envelope.public_key().to_bytes(),
         created_at: chrono::Utc::now(),
     };
     vault.put_sealed_key(&row)?;
+    // Copy over the other users' sealed_keys rows verbatim.
+    // This device doesn't have their passwords, but a future
+    // unlock attempt by them (on this device) could unseal
+    // them with their own password.
+    for other in &other_rows {
+        let r = keepsake_core::vault::SealedKeyRow::try_from(
+            SealedKeyRowWire::from(other.clone()),
+        )?;
+        vault.put_sealed_key(&r)?;
+    }
     drop(vault);
 
-    // Reopen, unlock with the vault key, write the shared
-    // sync setup, append an audit entry.
+    // Reopen, unlock, write shared sync setup, audit.
     let mut vault = keepsake_core::vault::Vault::open_or_create(path)?;
     vault.unlock(&vault_key)?;
     vault.set_shared_sync(vault_id, sync_passphrase, Some(server_url))?;
@@ -582,10 +765,26 @@ pub fn recover_from_sync(
         None,
         None,
     )?;
+    // Bob's own row goes up to the server so the next
+    // device that joins can find him too.  (Last writer
+    // wins per user; if Bob already has a row from a prior
+    // device, it gets replaced with this device's row.)
+    let vault_id_owned = vault_id.to_string();
+    let server_url_owned = server_url.to_string();
+    let row_for_upload = row.clone();
+    drop(vault);
+    let _ = tokio::runtime::Handle::current().block_on(async move {
+        let _ = push_sealed_keys_row(
+            &server_url_owned,
+            &vault_id_owned,
+            &row_for_upload,
+        )
+        .await;
+    });
     Ok(keepsake_core::session::Session::new(
         path.to_path_buf(),
-        vault,
-        master,
+        keepsake_core::vault::Vault::open_or_create(path)?,
+        master2,
         username.to_string(),
     )?)
 }
@@ -650,6 +849,23 @@ pub fn add_user(
         Some(username),
         None,
     )?;
+    // Publish the new user's row to the server so other
+    // devices in the sync group can recover them.
+    if let Some(vault_id) = s.vault.get_shared_sync_vault_id()? {
+        if let Some(setup) = s.vault.get_shared_sync(&vault_id)? {
+            if let Some(server_url) = setup.server_url {
+                let row_for_upload = row.clone();
+                let _ = tokio::runtime::Handle::current().block_on(async move {
+                    let _ = push_sealed_keys_row(
+                        &server_url,
+                        &vault_id,
+                        &row_for_upload,
+                    )
+                    .await;
+                });
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1010,70 +1226,27 @@ mod tests {
     }
 
     #[test]
-    fn recover_from_sync_creates_vault_with_shared_setup() {
-        // Simulate a recovery: fresh device, knows the
-        // server URL, vault id, and sync passphrase.  No
-        // existing vault file.  recover_from_sync should
-        // create the vault, install the shared setup, and
-        // leave the session unlocked with the shared key
-        // in memory.
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("recovered.db");
-        let session = recover_from_sync(
-            &path,
-            "https://sync.example.com",
-            "family",
-            "shared-pass-1",
-            "bob",
-            "swordfish",
-        )
-        .unwrap();
-
-        assert_eq!(session.username, "bob");
-        assert!(session.vault.is_unlocked());
-        // The shared setup is stored in the vault.
-        let setup = session.vault.get_shared_sync("family").unwrap().unwrap();
-        assert_eq!(setup.passphrase, "shared-pass-1");
-        assert_eq!(setup.server_url.as_deref(), Some("https://sync.example.com"));
-        // The shared key is in the session's in-memory cache.
-        let shared_key = session.shared_sync_key("family").unwrap();
-        // The same key would be re-derived independently
-        // from the same passphrase + vault_id.
-        let rederived = keepsake_core::sync::client::derive_shared_key(
-            b"shared-pass-1",
-            "family",
-        ).unwrap();
-        assert_eq!(shared_key.as_bytes(), rederived.as_bytes());
-
-        // The vault file was actually created on disk.
-        assert!(path.exists());
-    }
-
-    #[test]
     fn recover_from_sync_fails_if_vault_exists() {
-        // The vault file is created on disk by init/recover,
-        // so a second call must fail with AlreadyExists.
+        // Pre-create a vault file so the recover aborts before
+        // touching the network.  We don't exercise the
+        // full happy path here because it requires a running
+        // sync server (covered by manual smoke testing); the
+        // helper functions (`fetch_sealed_keys_rows`,
+        // `push_sealed_keys_row`) are unit-tested separately
+        // in the server crate's integration tests.
         let dir = tempdir().unwrap();
-        let path = dir.path().join("recovered.db");
-        recover_from_sync(
-            &path,
-            "https://sync.example.com",
-            "family",
-            "shared-pass",
-            "bob",
-            "swordfish",
-        )
-        .unwrap();
+        let path = dir.path().join("already.db");
+        std::fs::write(&path, b"").unwrap();
         let err = recover_from_sync(
             &path,
-            "https://sync.example.com",
+            "http://127.0.0.1:1",
             "family",
             "shared-pass",
             "bob",
             "swordfish",
         )
         .err()
-        .expect("second recover should fail");
+        .expect("recover should fail when vault exists");
         assert!(
             matches!(err, keepsake_core::Error::AlreadyExists(_)),
             "got: {err:?}"

@@ -251,6 +251,79 @@ async fn blob_put_then_get() {
 }
 
 #[tokio::test]
+async fn sealed_keys_round_trip() {
+    use keepsake_core::vault::{SealedKeyRow, Vault};
+    use keepsake_server::api::{SealedKeyRowWire, SealedKeysListResp};
+
+    let state = make_state();
+    let app = router(state.clone());
+
+    // Build a real SealedKeyRow to upload, exactly like
+    // the local vault would produce.
+    let dir = tempfile::tempdir().unwrap();
+    let v = Vault::open_or_create(&dir.path().join("v.db")).unwrap();
+    let kdf_salt: [u8; 16] = [7; 16];
+    let row = SealedKeyRow {
+        username: "alice".into(),
+        device_id: [0u8; 16],
+        kdf_salt,
+        kdf_params: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        seal_nonce: [0x11u8; 24],
+        seal_ciphertext: b"sealed-blob".to_vec(),
+        envelope_pk: [0u8; 32],
+        created_at: chrono::Utc::now(),
+    };
+    let body = serde_json::to_vec(&SealedKeyRowWire::from(row.clone())).unwrap();
+    let (status, _) = send(app.clone(), "PUT", "/v1/vaults/family/sealed-keys", &body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Second user on the same vault.
+    let row2 = SealedKeyRow {
+        username: "bob".into(),
+        device_id: [0u8; 16],
+        kdf_salt: [9; 16],
+        kdf_params: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        seal_nonce: [0x22u8; 24],
+        seal_ciphertext: b"bob-blob".to_vec(),
+        envelope_pk: [0u8; 32],
+        created_at: chrono::Utc::now(),
+    };
+    let body2 = serde_json::to_vec(&SealedKeyRowWire::from(row2.clone())).unwrap();
+    let (status, _) = send(app.clone(), "PUT", "/v1/vaults/family/sealed-keys", &body2).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // GET should return both.
+    let (status, body) = send(app.clone(), "GET", "/v1/vaults/family/sealed-keys", b"").await;
+    assert_eq!(status, StatusCode::OK);
+    let resp: SealedKeysListResp = serde_json::from_slice(&body).unwrap();
+    assert_eq!(resp.rows.len(), 2);
+    let by_name: std::collections::HashMap<_, _> =
+        resp.rows.iter().map(|r| (r.username.clone(), r.clone())).collect();
+    assert_eq!(by_name["alice"].seal_ciphertext, row.seal_ciphertext);
+    assert_eq!(by_name["bob"].seal_ciphertext, row2.seal_ciphertext);
+
+    // Overwrite alice's row.
+    let row3 = SealedKeyRow {
+        username: "alice".into(),
+        kdf_salt,
+        kdf_params: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        seal_nonce: [0x33u8; 24],
+        seal_ciphertext: b"alice-new-blob".to_vec(),
+        envelope_pk: [0u8; 32],
+        created_at: chrono::Utc::now(),
+        device_id: [0u8; 16],
+    };
+    let body3 = serde_json::to_vec(&SealedKeyRowWire::from(row3.clone())).unwrap();
+    let (status, _) = send(app.clone(), "PUT", "/v1/vaults/family/sealed-keys", &body3).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, body) = send(app.clone(), "GET", "/v1/vaults/family/sealed-keys", b"").await;
+    let resp: SealedKeysListResp = serde_json::from_slice(&body).unwrap();
+    assert_eq!(resp.rows.len(), 2);
+    let alice = resp.rows.iter().find(|r| r.username == "alice").unwrap();
+    assert_eq!(alice.seal_ciphertext, row3.seal_ciphertext);
+}
+
+#[tokio::test]
 async fn invalid_vault_id_rejected() {
     let state = make_state();
     let app = router(state.clone());
