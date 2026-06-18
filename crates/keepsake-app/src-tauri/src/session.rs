@@ -667,26 +667,56 @@ pub fn import_to_new_vault(
 /// `sealed_keys` row (with the recovered `vault_key` sealed
 /// under their `master_key`) so this device can unlock
 /// locally.  Sets up shared sync.  Returns an unlocked Session.
-pub fn recover_from_sync(
-    path: &std::path::Path,
-    server_url: &str,
-    vault_id: &str,
-    sync_passphrase: &str,
-    username: &str,
-    password: &str,
+pub async fn recover_from_sync(
+    path: std::path::PathBuf,
+    server_url: String,
+    vault_id: String,
+    sync_passphrase: String,
+    username: String,
+    password: String,
 ) -> Result<keepsake_core::session::Session> {
     if path.exists() {
         return Err(keepsake_core::Error::AlreadyExists(
             path.display().to_string(),
         ));
     }
-    use keepsake_core::identity::{
-        password_to_master_key, seal_vault_key, unseal_vault_key,
-        EnvelopeKey, SealedVaultKey,
-    };
+    // `recover_from_sync` does HTTP I/O (via `block_on` on
+    // async fns) and SQLite writes.  Tauri commands run on
+    // tokio worker threads, so we can't `block_on` from
+    // here.  Hop to a blocking thread first.  We clone
+    // every input so the future is `'static` + Send.
+    let outcome: keepsake_core::session::Session = tokio::task::spawn_blocking(move || {
+        recover_from_sync_blocking(
+            &path,
+            &server_url,
+            &vault_id,
+            &sync_passphrase,
+            password,
+            username,
+        )
+    })
+    .await
+    .map_err(|e| keepsake_core::Error::Sync(format!("recover join: {e}")))??;
+    Ok(outcome)
+}
 
-    // Fetch the sealed_keys rows from the server (sync).
-    let rows = tokio::runtime::Handle::current().block_on(async {
+/// Blocking implementation of `recover_from_sync`.  Lives
+/// here so it's clear which code runs on the spawn_blocking
+/// thread vs which runs on the Tauri worker.
+fn recover_from_sync_blocking(
+    path: &std::path::Path,
+    server_url: &str,
+    vault_id: &str,
+    sync_passphrase: &str,
+    password: String,
+    username: String,
+) -> Result<keepsake_core::session::Session> {
+    use keepsake_core::identity::{
+        password_to_master_key, seal_vault_key, unseal_vault_key, EnvelopeKey,
+    };
+    let rt = tokio::runtime::Handle::current();
+    // Fetch the sealed_keys rows from the server.
+    let rows = rt.block_on(async {
         fetch_sealed_keys_rows(server_url, vault_id).await
     })?;
     let mine = rows
@@ -702,10 +732,7 @@ pub fn recover_from_sync(
     // and the KDF parameters from the server-fetched row.
     let params = keepsake_core::crypto::KdfParams::decode(&mine.kdf_params)?;
     let (master, _salt) = password_to_master_key(password.as_bytes(), params)?;
-    // Verify the password is correct by unsealing the
-    // vault_key.  If the password is wrong, unseal_vault_key
-    // returns a decryption-failure error.
-    let sealed = SealedVaultKey {
+    let sealed = keepsake_core::identity::SealedVaultKey {
         nonce: mine.seal_nonce,
         ciphertext: mine.seal_ciphertext.clone(),
     };
@@ -717,17 +744,13 @@ pub fn recover_from_sync(
         .cloned()
         .collect();
 
-    // Create the local vault file with the recovered
-    // vault_key.
     let vault = keepsake_core::vault::Vault::open_or_create(path)?;
-    // Write Bob's own sealed_keys row using his new salt/
-    // params and the recovered vault_key.
     let params2 = keepsake_core::crypto::KdfParams::default();
     let (master2, salt2) = password_to_master_key(password.as_bytes(), params2)?;
     let new_sealed = seal_vault_key(&master2, &vault_key)?;
     let envelope = EnvelopeKey::from_master_key(&master2)?;
     let row = keepsake_core::vault::SealedKeyRow {
-        username: username.to_string(),
+        username: username.clone(),
         device_id: random_device_id(),
         kdf_salt: salt2.0,
         kdf_params: params2.encode(),
@@ -737,10 +760,6 @@ pub fn recover_from_sync(
         created_at: chrono::Utc::now(),
     };
     vault.put_sealed_key(&row)?;
-    // Copy over the other users' sealed_keys rows verbatim.
-    // This device doesn't have their passwords, but a future
-    // unlock attempt by them (on this device) could unseal
-    // them with their own password.
     for other in &other_rows {
         let r = keepsake_core::vault::SealedKeyRow::try_from(
             SealedKeyRowWire::from(other.clone()),
@@ -749,31 +768,21 @@ pub fn recover_from_sync(
     }
     drop(vault);
 
-    // Reopen, unlock, write shared sync setup, audit.
     let mut vault = keepsake_core::vault::Vault::open_or_create(path)?;
     vault.unlock(&vault_key)?;
     vault.set_shared_sync(vault_id, sync_passphrase, Some(server_url))?;
     vault.append_audit(
         AuditOp::AddUser,
-        username,
+        &username,
         Some(&username),
         Some("vault recovered from sync"),
     )?;
-    vault.append_audit(
-        AuditOp::Unlock,
-        username,
-        None,
-        None,
-    )?;
-    // Bob's own row goes up to the server so the next
-    // device that joins can find him too.  (Last writer
-    // wins per user; if Bob already has a row from a prior
-    // device, it gets replaced with this device's row.)
+    vault.append_audit(AuditOp::Unlock, &username, None, None)?;
+
     let vault_id_owned = vault_id.to_string();
     let server_url_owned = server_url.to_string();
     let row_for_upload = row.clone();
-    drop(vault);
-    let _ = tokio::runtime::Handle::current().block_on(async move {
+    let _ = rt.block_on(async move {
         let _ = push_sealed_keys_row(
             &server_url_owned,
             &vault_id_owned,
@@ -781,11 +790,12 @@ pub fn recover_from_sync(
         )
         .await;
     });
+
     Ok(keepsake_core::session::Session::new(
         path.to_path_buf(),
         keepsake_core::vault::Vault::open_or_create(path)?,
         master2,
-        username.to_string(),
+        username,
     )?)
 }
 
@@ -1225,8 +1235,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn recover_from_sync_fails_if_vault_exists() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn recover_from_sync_fails_if_vault_exists() {
         // Pre-create a vault file so the recover aborts before
         // touching the network.  We don't exercise the
         // full happy path here because it requires a running
@@ -1238,13 +1248,14 @@ mod tests {
         let path = dir.path().join("already.db");
         std::fs::write(&path, b"").unwrap();
         let err = recover_from_sync(
-            &path,
-            "http://127.0.0.1:1",
-            "family",
-            "shared-pass",
-            "bob",
-            "swordfish",
+            path,
+            "http://127.0.0.1:1".to_string(),
+            "family".to_string(),
+            "shared-pass".to_string(),
+            "bob".to_string(),
+            "swordfish".to_string(),
         )
+        .await
         .err()
         .expect("recover should fail when vault exists");
         assert!(

@@ -445,20 +445,32 @@ async fn recover_from_sync(
     let p = path
         .map(std::path::PathBuf::from)
         .unwrap_or_else(default_vault_path);
+    // Refuse early if a vault is already unlocked.
+    {
+        if state.session.lock().is_some() {
+            return Err("vault is already unlocked".into());
+        }
+    }
+    // Run the (HTTP + SQLite) recovery on a blocking thread so
+    // we can release the session mutex before awaiting.  The
+    // async fn returns a future; we `await` it OUTSIDE the
+    // lock scope.
+    let session = session::recover_from_sync(
+        p.clone(),
+        server_url.clone(),
+        vault_id.clone(),
+        sync_passphrase.clone(),
+        username.clone(),
+        password.clone(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    // Install the unlocked session.
     {
         let mut guard = state.session.lock();
         if guard.is_some() {
             return Err("vault is already unlocked".into());
         }
-        let session = session::recover_from_sync(
-            &p,
-            &server_url,
-            &vault_id,
-            &sync_passphrase,
-            &username,
-            &password,
-        )
-        .map_err(|e| e.to_string())?;
         *guard = Some(session);
     }
     // Start the auto-sync loop, just like `unlock` does.
