@@ -158,6 +158,59 @@ impl Vault {
         Ok(())
     }
 
+    /// Add a column to an existing table if it isn't already
+    /// there.  Used by additive migrations so older vaults
+    /// get the new columns without a destructive rebuild.
+    /// No-op if the table doesn't exist or the column is
+    /// already present.
+    fn add_column_if_missing(
+        &self,
+        table: &str,
+        column: &str,
+        col_type: &str,
+    ) -> Result<()> {
+        // PRAGMA table_info returns one row per column.
+        // If our column is already there, skip the ALTER.
+        let mut stmt = self.conn.prepare(&format!(
+            "PRAGMA table_info({})",
+            table
+        ))?;
+        let mut rows = stmt.query([])?;
+        let mut exists = false;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                exists = true;
+                break;
+            }
+        }
+        drop(rows);
+        drop(stmt);
+        if !exists {
+            // The table itself might not exist on a fresh
+            // vault; CREATE TABLE IF NOT EXISTS already
+            // created it with the column, so this ALTER
+            // would error.  Catch and ignore the
+            // "duplicate column" error to be safe.
+            let sql = format!(
+                "ALTER TABLE {} ADD COLUMN {} {}",
+                table, column, col_type
+            );
+            // Use a raw execute and tolerate "duplicate
+            // column name" errors (SQLSTATE generic).
+            if let Err(e) = self.conn.execute(&sql, []) {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column") {
+                    return Err(Error::Vault(format!(
+                        "migration ALTER {}.{}: {}",
+                        table, column, msg
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Create the schema.  Idempotent.
     pub fn migrate(&self) -> Result<()> {
         self.conn.execute_batch(
@@ -222,6 +275,14 @@ impl Vault {
                 rotated_at        INTEGER
             );
             "#,
+        )?;
+        // Additive migrations for older vaults.  Each step
+        // is a no-op for vaults that already have the new
+        // shape, so it's safe to run on every launch.
+        self.add_column_if_missing(
+            "shared_sync_keys",
+            "server_url",
+            "TEXT",
         )?;
         self.ensure_meta()?;
         Ok(())
@@ -1147,6 +1208,42 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].seq, 1);
         assert_eq!(entries[1].seq, 2);
+    }
+
+    #[test]
+    fn migrate_adds_server_url_to_old_vault() {
+        // Simulate a vault created with the old schema
+        // (no server_url column on shared_sync_keys).
+        // Open the file with raw SQL, create the table
+        // without server_url, then run our migrate() and
+        // verify the column was added.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("vault.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE shared_sync_keys (
+                    vault_id          TEXT PRIMARY KEY,
+                    passphrase        BLOB NOT NULL,
+                    passphrase_nonce  BLOB NOT NULL,
+                    kdf_salt          BLOB NOT NULL,
+                    kdf_m_kib         INTEGER NOT NULL,
+                    kdf_t             INTEGER NOT NULL,
+                    kdf_p             INTEGER NOT NULL,
+                    created_at        INTEGER NOT NULL,
+                    rotated_at        INTEGER
+                 )",
+            ).unwrap();
+        }
+        // Now open with the real Vault and migrate.
+        let mut v = Vault::open_or_create(&path).unwrap();
+        v.migrate().unwrap();
+        unlock(&mut v);
+        // Setting + reading should work.
+        v.set_shared_sync("family", "passphrase", Some("https://sync.example.com"))
+            .unwrap();
+        let setup = v.get_shared_sync("family").unwrap().unwrap();
+        assert_eq!(setup.server_url.as_deref(), Some("https://sync.example.com"));
     }
 
     #[test]
