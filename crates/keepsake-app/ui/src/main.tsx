@@ -10,6 +10,7 @@ import { AuditPage } from "./pages/Audit";
 import { Settings } from "./pages/Settings";
 import { SyncPage } from "./pages/Sync";
 import { Insights } from "./pages/Insights";
+import { AboutPage } from "./pages/About";
 import "./styles.css";
 
 const root = document.getElementById("root");
@@ -26,6 +27,7 @@ if (root) {
         <Route path="/sync" component={SyncPage} />
         <Route path="/insights" component={Insights} />
         <Route path="/settings" component={Settings} />
+        <Route path="/about" component={AboutPage} />
       </Router>
     ),
     root,

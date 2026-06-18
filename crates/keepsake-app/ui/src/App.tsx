@@ -515,6 +515,7 @@ function Sidebar() {
           <SidebarLink href="/sync" icon="⇄" label="Sync" />
           <SidebarLink href="/audit" icon="🛡" label="Audit" />
           <SidebarLink href="/settings" icon="⚙" label="Settings" />
+          <SidebarLink href="/about" icon="ℹ" label="About" />
         </nav>
       </div>
 

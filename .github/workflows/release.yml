@@ -39,9 +39,6 @@ jobs:
           - platform: macos-latest
             os: macos
             args: --target aarch64-apple-darwin
-          - platform: macos-latest
-            os: macos
-            args: --target x86_64-apple-darwin
           - platform: ubuntu-22.04
             os: linux
             args: ""
@@ -88,6 +85,32 @@ jobs:
       - name: Install UI deps
         working-directory: crates/keepsake-app/ui
         run: npm ci
+
+      - name: Stamp the version from the tag
+        # The bundled app's version field is read from
+        # tauri.conf.json (and the keepsake-app Cargo.toml),
+        # not from the tag.  This step rewrites both to
+        # match the tag so the produced bundles report the
+        # same version the release was tagged with.
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Stamping version: $VERSION"
+          sed -i.bak "s/\"version\": \"0.1.0\"/\"version\": \"$VERSION\"/" \
+            crates/keepsake-app/src-tauri/tauri.conf.json
+          rm crates/keepsake-app/src-tauri/tauri.conf.json.bak
+          sed -i.bak "s/^version     = \"0.1.0\"/version     = \"$VERSION\"/" \
+            crates/keepsake-app/src-tauri/Cargo.toml
+          rm crates/keepsake-app/src-tauri/Cargo.toml.bak
+          # Also bump the workspace version so the CLI and
+          # server report the same version on `keepsake
+          # --version`.
+          sed -i.bak "s/^version      = \"0.1.0\"/version      = \"$VERSION\"/" \
+            Cargo.toml
+          rm Cargo.toml.bak
+          grep -E "version" crates/keepsake-app/src-tauri/tauri.conf.json | head -1
+          grep -E "^version" crates/keepsake-app/src-tauri/Cargo.toml | head -1
+          grep -E "^version" Cargo.toml | head -1
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0.6.2

@@ -1363,3 +1363,64 @@ a.keepsake-link--missing {
   color: var(--yellow);
   background: rgba(255, 200, 80, 0.08);
 }
+
+/* About page */
+.about-mark {
+  display: inline-block;
+  font-size: 1.1em;
+  margin-right: 0.4rem;
+  color: var(--accent);
+  vertical-align: -0.05em;
+}
+.about-row {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 0.85rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.about-row:last-child {
+  border-bottom: none;
+}
+.about-icon {
+  flex: 0 0 1.4rem;
+  font-size: 1.2rem;
+  line-height: 1.4rem;
+  text-align: center;
+  color: var(--accent);
+  opacity: 0.85;
+}
+.about-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+.about-value {
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+.about-value a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+.about-value a:hover {
+  color: var(--yellow);
+}
+.about-link {
+  display: flex !important;
+  align-items: center;
+  gap: 0.6rem;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  padding: 0.75rem 1rem;
+  margin: 0.5rem 0;
+}
+.about-link .about-external {
+  margin-left: auto;
+  color: var(--muted);
+}
