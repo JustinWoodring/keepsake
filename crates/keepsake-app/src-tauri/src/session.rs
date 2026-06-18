@@ -268,31 +268,32 @@ pub fn rewrite_audit_chain(state: &AppState) -> Result<usize> {
 /// Push all local records to the given server URL.  Blocks
 /// the calling thread (the Tauri command) until done.  Returns
 /// the number of records pushed.
-pub fn sync_push(state: &AppState, server_url: String) -> Result<usize> {
+pub fn sync_push(
+    state: &AppState,
+    server_url: String,
+    vault_id: String,
+) -> Result<usize> {
     let mut guard = state.session.lock();
     let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
-    let client = keepsake_core::sync::client::SyncClient::new(server_url);
+    let key = keepsake_core::sync::client::derive_personal_vault_key(&session.master)?;
+    let client = keepsake_core::sync::client::SyncClient::new(server_url, vault_id);
     tokio::runtime::Handle::current()
-        .block_on(client.push(session))
+        .block_on(client.push(&key, session))
 }
 
 /// Pull all remote records and apply them locally.  Returns
 /// the number of changes applied.
-pub fn sync_pull(state: &AppState, server_url: String) -> Result<usize> {
+pub fn sync_pull(
+    state: &AppState,
+    server_url: String,
+    vault_id: String,
+) -> Result<usize> {
     let mut guard = state.session.lock();
     let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
-    let client = keepsake_core::sync::client::SyncClient::new(server_url);
+    let key = keepsake_core::sync::client::derive_personal_vault_key(&session.master)?;
+    let client = keepsake_core::sync::client::SyncClient::new(server_url, vault_id);
     tokio::runtime::Handle::current()
-        .block_on(client.pull(session))
-}
-
-/// Register the current user with the server (idempotent).
-pub fn sync_register(state: &AppState, server_url: String) -> Result<()> {
-    let guard = state.session.lock();
-    let session = guard.as_ref().ok_or(keepsake_core::Error::Locked)?;
-    let client = keepsake_core::sync::client::SyncClient::new(server_url);
-    tokio::runtime::Handle::current()
-        .block_on(client.register(session))
+        .block_on(client.pull(&key, session))
 }
 
 /// List the usernames on this device (for the unlock picker).

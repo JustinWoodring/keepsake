@@ -1,17 +1,15 @@
-//! `keepsake-server` — standalone axum server that stores opaque
-//! ciphertext for sync.  Authenticates users via Ed25519
-//! envelope signatures and short-lived bearer tokens.
+//! `keepsake-server` — pure encrypted blob store.  No auth,
+//! no per-user state.  Vaults are addressable by URL path
+//! segment; knowing the URL + vault id is the only access
+//! control.
 //!
 //! Configuration (env vars):
 //!
 //! * `KEEPSAKE_ADDR`     — listen address (default `127.0.0.1:8484`)
 //! * `KEEPSAKE_DB`       — SQLite path (default `./keepsake-server.db`)
-//! * `KEEPSAKE_TLS`      — set to `1` to require TLS at the
-//!                          load-balancer layer (recommended in
-//!                          production; we don't terminate TLS
-//!                          here, nginx/caddy should).
 //!
-//! See `docs/sync-protocol.md` for the wire spec.
+//! TLS is not handled by this binary.  Put nginx/caddy in
+//! front for TLS termination.  See `docs/deploy-sync-server.md`.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -40,15 +38,10 @@ async fn main() -> anyhow::Result<()> {
 
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("keepsake-server listening on http://{addr} (db: {})", db_path.display());
-
-    if std::env::var("KEEPSAKE_TLS").is_ok() {
-        tracing::warn!(
-            "KEEPSAKE_TLS is set, but the server does not terminate TLS itself. \
-             Put nginx/caddy in front for TLS termination."
-        );
-    }
-
+    tracing::info!(
+        "keepsake-server listening on http://{addr} (db: {})",
+        db_path.display()
+    );
     axum::serve(listener, app).await?;
     Ok(())
 }

@@ -139,9 +139,10 @@ export const api = {
   configureSync: (baseUrl: string): Promise<void> => invoke("configure_sync", { baseUrl }),
   recordTitles: (): Promise<RecordTitle[]> => invoke("record_titles"),
   rewriteAuditChain: (): Promise<number> => invoke("rewrite_audit_chain"),
-  syncRegister: (serverUrl: string): Promise<void> => invoke("sync_register", { serverUrl }),
-  syncPush: (serverUrl: string): Promise<number> => invoke("sync_push", { serverUrl }),
-  syncPull: (serverUrl: string): Promise<number> => invoke("sync_pull", { serverUrl }),
+  syncPush: (serverUrl: string, vaultId: string): Promise<number> =>
+    invoke("sync_push", { serverUrl, vaultId }),
+  syncPull: (serverUrl: string, vaultId: string): Promise<number> =>
+    invoke("sync_pull", { serverUrl, vaultId }),
 
   exportBundle:  (passphrase: string): Promise<number[]> =>
     invoke("export_bundle", { passphrase }),

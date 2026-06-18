@@ -106,11 +106,13 @@ pub enum Command {
         reveal: bool,
     },
     /// Sync with a self-hosted server.  Subcommand is one of
-    /// `register`, `push`, or `pull`.
+    /// `push` or `pull`.  `--vault` selects the vault id.
     Sync {
         #[arg(long)]
         server: Option<String>,
-        /// Subcommand: register | push | pull
+        #[arg(long)]
+        vault: Option<String>,
+        /// Subcommand: push | pull
         #[arg(default_value = "push")]
         sub: String,
     },
@@ -162,7 +164,7 @@ pub async fn dispatch(
         Command::Find { query }              => commands::find::run(path, query, session).await,
         Command::Links { id, direction }     => commands::links::run(path, id, direction, session).await,
         Command::Resolve { id, reveal }      => commands::resolve::run(path, id, reveal, session).await,
-        Command::Sync { server, sub }       => commands::sync::run(path, server, sub, session).await,
+        Command::Sync { server, vault, sub } => commands::sync::run(path, server, vault, sub, session).await,
         Command::Export { out }              => commands::export::run(path, out, session).await,
         Command::Import { input }            => commands::import::run(path, input, session).await,
         Command::Audit { verify }            => commands::audit::run(path, verify, session).await,

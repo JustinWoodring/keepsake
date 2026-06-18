@@ -1,154 +1,66 @@
-//! HTTP API for the sync server.  Implements the wire protocol
-//! from `crates/keepsake-core/src/sync/protocol.rs` plus the
-//! signature/bearer envelope from `docs/sync-protocol.md`.
+//! HTTP API for the sync server.  Pure encrypted blob store —
+//! no per-user auth.  Every endpoint is scoped to a `vault_id`
+//! path segment; the server has no idea who the caller is,
+//! only that a request is well-formed and the URL points at a
+//! real vault.
 //!
 //! Routes:
 //!
-//! * `POST /v1/auth/register`  — body is `ProtoRequest::Register`
-//! * `POST /v1/auth/login`     — body is `ProtoRequest::Login` (returns a bearer)
-//! * `POST /v1/sync/push`      — `ProtoRequest::Push` (signed)
-//! * `POST /v1/sync/pull`      — `ProtoRequest::Pull` (signed)
-//! * `PUT  /v1/blobs/:sha256`  — body is `Request::PutBlob` (signed)
-//! * `GET  /v1/blobs/:sha256`  — returns `ProtoResponse::BlobResp` (signed)
-//! * `GET  /v1/health`         — liveness
+//! * `GET  /v1/health`              — liveness, no auth, no body
+//! * `POST /v1/vaults/:id/sync/push` — body is `Request::Push`
+//! * `POST /v1/vaults/:id/sync/pull` — body is `Request::Pull`;
+//!                                     returns either the current
+//!                                     state (when `since` is
+//!                                     empty) or a change feed
+//! * `PUT  /v1/vaults/:id/blobs/:sha256` — body is ciphertext
+//! * `GET  /v1/vaults/:id/blobs/:sha256` — returns ciphertext
 
 use std::sync::Arc;
 
 use axum::{
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response as AxumResponse},
     routing::{get, post, put},
     Json, Router,
 };
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use keepsake_core::sync::protocol::{Request as ProtoRequest, Response as ProtoResponse};
-use parking_lot::Mutex;
-use rand::RngCore;
-use serde::Deserialize;
 
-use crate::storage::{SessionRow, Storage};
+use crate::storage::{StateRow, Storage};
 
 /// App state shared across all routes.
 pub struct AppState {
     pub storage: parking_lot::Mutex<Storage>,
-    /// Cached verifying keys (32 bytes → VerifyingKey) to avoid
-    /// re-deriving on every request.  Small enough to keep
-    /// in-process; not security-critical.
-    pub keys: Mutex<std::collections::BTreeMap<[u8; 32], VerifyingKey>>,
-    /// Bearer session lifetime (seconds).
-    pub session_ttl_secs: i64,
 }
 
 impl AppState {
     pub fn new(storage: Storage) -> Self {
         Self {
             storage: parking_lot::Mutex::new(storage),
-            keys: Mutex::new(std::collections::BTreeMap::new()),
-            session_ttl_secs: 60 * 60 * 24, // 24 hours
         }
-    }
-
-    fn verifying_key(&self, pk: &[u8; 32]) -> Option<VerifyingKey> {
-        if let Some(k) = self.keys.lock().get(pk) {
-            return Some(*k);
-        }
-        let bytes: [u8; 32] = *pk;
-        let vk = VerifyingKey::from_bytes(&bytes).ok()?;
-        self.keys.lock().insert(*pk, vk);
-        Some(vk)
     }
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
-        .route("/v1/auth/challenge", get(issue_challenge))
-        .route("/v1/auth/register", post(register))
-        .route("/v1/auth/login", post(login))
-        .route("/v1/sync/push", post(push))
-        .route("/v1/sync/pull", post(pull))
-        .route("/v1/blobs/:sha256", put(put_blob).get(get_blob))
+        .route(
+            "/v1/vaults/:id/sync/push",
+            post(push),
+        )
+        .route(
+            "/v1/vaults/:id/sync/pull",
+            post(pull),
+        )
+        .route(
+            "/v1/vaults/:id/blobs/:sha256",
+            put(put_blob).get(get_blob),
+        )
         .with_state(state)
 }
 
-// -- envelope parsing --------------------------------------------------------
-
-/// Headers every authenticated request must carry.
-fn auth_headers(headers: &HeaderMap) -> Result<([u8; 32], [u8; 32], Vec<u8>), ApiError> {
-    let pk_hex = headers
-        .get("x-envelope-pk")
-        .ok_or(ApiError::unauthorized("missing x-envelope-pk"))?
-        .to_str()
-        .map_err(|_| ApiError::unauthorized("x-envelope-pk not utf-8"))?;
-    let pk_bytes = hex::decode(pk_hex)
-        .map_err(|_| ApiError::unauthorized("x-envelope-pk not hex"))?;
-    let pk: [u8; 32] = pk_bytes
-        .try_into()
-        .map_err(|_| ApiError::unauthorized("x-envelope-pk not 32 bytes"))?;
-
-    let auth = headers
-        .get("authorization")
-        .ok_or(ApiError::unauthorized("missing authorization"))?
-        .to_str()
-        .map_err(|_| ApiError::unauthorized("authorization not utf-8"))?;
-    let bearer_hex = auth
-        .strip_prefix("Bearer ")
-        .ok_or(ApiError::unauthorized("authorization must be Bearer"))?;
-    let bearer_bytes = hex::decode(bearer_hex)
-        .map_err(|_| ApiError::unauthorized("bearer not hex"))?;
-    let bearer: [u8; 32] = bearer_bytes
-        .try_into()
-        .map_err(|_| ApiError::unauthorized("bearer not 32 bytes"))?;
-
-    let sig_hex = headers
-        .get("x-signature")
-        .ok_or(ApiError::unauthorized("missing x-signature"))?
-        .to_str()
-        .map_err(|_| ApiError::unauthorized("x-signature not utf-8"))?;
-    let sig = hex::decode(sig_hex)
-        .map_err(|_| ApiError::unauthorized("x-signature not hex"))?;
-    if sig.len() != 64 {
-        return Err(ApiError::unauthorized("x-signature not 64 bytes"));
-    }
-
-    Ok((pk, bearer, sig))
-}
-
-/// Verify the signature on `body` for the given envelope pk.
-fn verify_signed(
-    state: &AppState,
-    pk: &[u8; 32],
-    body: &[u8],
-    sig_bytes: &[u8],
-) -> Result<(), ApiError> {
-    let vk = state
-        .verifying_key(pk)
-        .ok_or_else(|| ApiError::unauthorized("unknown envelope key"))?;
-    let sig_arr: [u8; 64] = sig_bytes
-        .try_into()
-        .map_err(|_| ApiError::unauthorized("bad signature length"))?;
-    let sig = Signature::from_bytes(&sig_arr);
-    vk.verify(body, &sig)
-        .map_err(|_| ApiError::unauthorized("signature verification failed"))?;
-    Ok(())
-}
-
-/// Resolve a bearer to a username; rejects expired sessions.
-fn bearer_to_username(state: &AppState, bearer: &[u8; 32]) -> Result<String, ApiError> {
-    let now = chrono::Utc::now().timestamp();
-    let session = state.storage.lock()
-        .get_session(bearer)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::unauthorized("unknown bearer"))?;
-    if session.expires_at < now {
-        return Err(ApiError::unauthorized("bearer expired"));
-    }
-    Ok(session.username)
-}
-
-// -- ApiError ----------------------------------------------------------------
+// -- error type ------------------------------------------------------------
 
 #[derive(Debug)]
 pub struct ApiError {
@@ -158,31 +70,10 @@ pub struct ApiError {
 }
 
 impl ApiError {
-    pub fn unauthorized(msg: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            code: "unauthorized".into(),
-            message: msg.into(),
-        }
-    }
     pub fn bad_request(msg: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
             code: "bad_request".into(),
-            message: msg.into(),
-        }
-    }
-    pub fn conflict(msg: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            code: "conflict".into(),
-            message: msg.into(),
-        }
-    }
-    pub fn not_found(msg: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            code: "not_found".into(),
             message: msg.into(),
         }
     }
@@ -209,256 +100,165 @@ impl From<crate::storage::Error> for ApiError {
     fn from(e: crate::storage::Error) -> Self {
         use crate::storage::Error::*;
         match e {
-            NotFound(m) => Self::not_found(m),
-            Conflict(m) => Self::conflict(m),
             Invalid(m)  => Self::bad_request(m),
-            Unauthorized => Self::unauthorized("storage: unauthorized"),
-            Expired      => Self::unauthorized("storage: expired"),
-            Sqlite(e)    => Self::internal(format!("sqlite: {e}")),
-            Io(e)        => Self::internal(format!("io: {e}")),
+            Sqlite(e)   => Self::internal(format!("sqlite: {e}")),
+            Io(e)       => Self::internal(format!("io: {e}")),
+            other       => Self::internal(format!("{other:?}")),
         }
     }
 }
 
-// -- handlers ----------------------------------------------------------------
+// -- handlers --------------------------------------------------------------
 
 async fn health() -> Json<ProtoResponse> {
     Json(ProtoResponse::Ok { message: Some("ok".into()) })
 }
 
-#[derive(Deserialize)]
-struct RegisterBody {
-    username: String,
-    envelope_pk: [u8; 32],
-}
-
-async fn register(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<RegisterBody>,
-) -> Result<Json<ProtoResponse>, ApiError> {
-    if body.username.is_empty() || body.username.len() > 64 {
-        return Err(ApiError::bad_request("username must be 1..=64 chars"));
-    }
-    if state.storage.lock().get_user(&body.username)
-        .map_err(ApiError::from)?
-        .is_some()
-    {
-        return Err(ApiError::conflict("username already taken"));
-    }
-    let now = chrono::Utc::now().timestamp();
-    state.storage.lock()
-        .put_user(&crate::storage::UserRow {
-            username: body.username,
-            envelope_pk: body.envelope_pk,
-            created_at: now,
-        })
-        .map_err(ApiError::from)?;
-    Ok(Json(ProtoResponse::Ok { message: Some("registered".into()) }))
-}
-
-/// Login step 1 (server returns a challenge).
-///
-/// This is implicit in the wire protocol's `ProtoRequest::Login` —
-/// the client supplies a `signature` over a challenge.  We
-/// implement the explicit two-step flow instead: the client
-/// first calls `GET /v1/auth/challenge?username=...`, signs
-/// the returned bytes with its envelope key, then calls
-/// `POST /v1/auth/login { username, challenge, signature }`.
-///
-/// This route is the second step.
-async fn login(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ProtoRequest>,
-) -> Result<Json<ProtoResponse>, ApiError> {
-    let (username, challenge, signature) = match req {
-        ProtoRequest::Login { username, challenge, signature } => (username, challenge, signature),
-        _ => return Err(ApiError::bad_request("expected ProtoRequest::Login")),
-    };
-
-    // Look up the user; their envelope public key signs the
-    // challenge.
-    let user = state.storage.lock()
-        .get_user(&username)
-        .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError::unauthorized("unknown user"))?;
-
-    // Consume the challenge.
-    if challenge.len() != 32 {
-        return Err(ApiError::bad_request("challenge must be 32 bytes"));
-    }
-    let challenge_arr: [u8; 32] = challenge[..].try_into().unwrap();
-    let stored = state.storage.lock()
-        .take_challenge(&challenge_arr)
-        .map_err(ApiError::from)?;
-    if stored.username != username {
-        return Err(ApiError::unauthorized("challenge was for a different user"));
-    }
-    if stored.expires_at < chrono::Utc::now().timestamp() {
-        return Err(ApiError::unauthorized("challenge expired"));
-    }
-
-    // Verify the signature.
-    if signature.len() != 64 {
-        return Err(ApiError::bad_request("signature must be 64 bytes"));
-    }
-    let sig_arr: [u8; 64] = signature[..].try_into().unwrap();
-    verify_signed(&state, &user.envelope_pk, &challenge, &sig_arr)?;
-
-    // Issue a bearer.
-    let mut bearer = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bearer);
-    let expires_at =
-        chrono::Utc::now().timestamp() + state.session_ttl_secs;
-    state.storage.lock()
-        .put_session(&SessionRow {
-            bearer,
-            username: username.clone(),
-            expires_at,
-        })
-        .map_err(ApiError::from)?;
-    Ok(Json(ProtoResponse::LoginOk { bearer, expires_at }))
-}
-
-#[derive(Deserialize)]
-struct ChallengeQuery {
-    username: String,
-}
-
-/// Login step 1: server returns a random 32-byte challenge.
-async fn issue_challenge(
-    State(state): State<Arc<AppState>>,
-    axum::extract::Query(q): axum::extract::Query<ChallengeQuery>,
-) -> Result<Json<ProtoResponse>, ApiError> {
-    // Confirm the user exists; don't leak whether the username
-    // is taken by responding differently.
-    if state.storage.lock().get_user(&q.username)
-        .map_err(ApiError::from)?
-        .is_none()
-    {
-        return Err(ApiError::unauthorized("unknown user"));
-    }
-    let mut challenge = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut challenge);
-    let expires_at = chrono::Utc::now().timestamp() + 60; // 1 minute
-    state
-        .storage
-        .lock()
-        .put_challenge(&crate::storage::ChallengeRow {
-            challenge,
-            username: q.username,
-            expires_at,
-        })
-        .map_err(ApiError::from)?;
-    // Reuse BlobResp (just bytes) as a transport for the
-    // challenge, since the protocol doesn't have a dedicated
-    // challenge response type.  Clients should parse the
-    // `ciphertext` field as the 32-byte challenge.
-    Ok(Json(ProtoResponse::BlobResp { ciphertext: challenge.to_vec() }))
-}
-
 async fn push(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    Path(vault_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ProtoResponse>, ApiError> {
-    let (pk, bearer, sig) = auth_headers(&headers)?;
-    verify_signed(&state, &pk, &body, &sig)?;
-    let username = bearer_to_username(&state, &bearer)?;
-
+    validate_vault_id(&vault_id)?;
     let req: ProtoRequest = serde_json::from_slice(&body)
         .map_err(|e| ApiError::bad_request(format!("body parse: {e}")))?;
-    let new_clock = match req {
-        ProtoRequest::Push { new_clock, changes } => {
+    let (n, max_lamport) = match req {
+        ProtoRequest::Push { changes, .. } => {
+            let n = changes.len();
+            let max = changes.iter().map(|c| c.lamport).max().unwrap_or(0);
             state.storage.lock()
-                .append_changes(&changes)
-                .map_err(ApiError::from)?;
-            new_clock
+                .append_changes(&vault_id, &changes)?;
+            (n, max)
         }
-        _ => return Err(ApiError::bad_request("expected ProtoRequest::Push")),
+        _ => return Err(ApiError::bad_request("expected Request::Push")),
     };
-    tracing::info!(
-        actor = %username,
-        clock = ?new_clock.counters,
-        "push ok"
-    );
+    tracing::info!(vault = %vault_id, n, max_lamport, "push ok");
     Ok(Json(ProtoResponse::Ok { message: None }))
 }
 
 async fn pull(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    Path(vault_id): Path<String>,
     body: Bytes,
 ) -> Result<Json<ProtoResponse>, ApiError> {
-    let (pk, bearer, sig) = auth_headers(&headers)?;
-    verify_signed(&state, &pk, &body, &sig)?;
-    let _username = bearer_to_username(&state, &bearer)?;
-
-    let req: ProtoRequest = serde_json::from_slice(&body)
-        .map_err(|e| ApiError::bad_request(format!("body parse: {e}")))?;
-    let since = match req {
-        ProtoRequest::Pull { since } => since,
-        _ => return Err(ApiError::bad_request("expected ProtoRequest::Pull")),
+    validate_vault_id(&vault_id)?;
+    // Empty body = "fresh client, give me state"; otherwise
+    // a `Request::Pull` with a `since` vector clock.
+    let since_vector_clock: Option<keepsake_core::sync::VectorClock> = if body.is_empty() {
+        None
+    } else {
+        let req: ProtoRequest = serde_json::from_slice(&body)
+            .map_err(|e| ApiError::bad_request(format!("body parse: {e}")))?;
+        match req {
+            ProtoRequest::Pull { since } => Some(since),
+            _ => return Err(ApiError::bad_request("expected Request::Pull")),
+        }
     };
-
-    // For the long-poll, we'd block here on a watch channel.
-    // For v1, do an immediate read.  Clients can re-call.
-    let changes = state.storage.lock()
-        .changes_since(None, 0)
-        .map_err(ApiError::from)?;
-    let _ = since; // TODO: filter by per-actor clock
-    let server_clock = state.storage.lock().all_clocks().map_err(ApiError::from)?;
-    Ok(Json(ProtoResponse::PullResp {
-        changes,
-        server_clock: keepsake_core::sync::VectorClock {
-            counters: server_clock,
-        },
-    }))
+    let storage = state.storage.lock();
+    match since_vector_clock {
+        None => {
+            // Fresh client: give it the current state.
+            let state_rows: Vec<StateRow> = storage.current_state(&vault_id)?;
+            // Map into a `Response::PullResp`-shaped payload.  We
+            // piggyback on the existing wire type: the changes
+            // list contains one synthetic `Change` per current
+            // record, with `record_id` set and the ciphertext
+            // payload.  The client unwraps these on the other
+            // side.
+            let synthetic = state_rows.into_iter().map(|r| {
+                // Decode record_id from raw bytes to UUID.
+                let mut record_id_arr = [0u8; 16];
+                if r.record_id.len() != 16 {
+                    return Err(ApiError::internal("bad record_id bytes"));
+                }
+                record_id_arr.copy_from_slice(&r.record_id);
+                let record_id = uuid::Uuid::from_bytes(record_id_arr);
+                let mut change_id_arr = [0u8; 16];
+                if r.change_id.len() != 16 {
+                    return Err(ApiError::internal("bad change_id bytes"));
+                }
+                change_id_arr.copy_from_slice(&r.change_id);
+                let id = uuid::Uuid::from_bytes(change_id_arr);
+                let ts = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(r.ts_millis)
+                    .ok_or_else(|| ApiError::internal("bad ts_millis"))?;
+                Ok(keepsake_core::sync::Change {
+                    id,
+                    lamport: r.lamport,
+                    ts,
+                    author: r.actor,
+                    record_id: Some(record_id),
+                    payload: r.payload,
+                })
+            }).collect::<Result<Vec<_>, ApiError>>()?;
+            let clocks = storage.all_clocks(&vault_id)?;
+            tracing::info!(vault = %vault_id, n = synthetic.len(), "pull state");
+            Ok(Json(ProtoResponse::PullResp {
+                changes: synthetic,
+                server_clock: keepsake_core::sync::VectorClock { counters: clocks },
+            }))
+        }
+        Some(since) => {
+            // A change is "new" for the client if its lamport
+            // exceeds any of the client's per-actor clocks (or
+            // if the client has no clock for that actor).  This
+            // is conservative: a change might be re-delivered
+            // if a clock isn't strictly monotonic.
+            let since_max: u64 = since.counters.values().copied().max().unwrap_or(0);
+            let changes = storage.changes_since(&vault_id, since_max)?;
+            let clocks = storage.all_clocks(&vault_id)?;
+            tracing::info!(vault = %vault_id, n = changes.len(), since_max, "pull changes");
+            Ok(Json(ProtoResponse::PullResp {
+                changes,
+                server_clock: keepsake_core::sync::VectorClock { counters: clocks },
+            }))
+        }
+    }
 }
 
 async fn put_blob(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(sha256_hex): Path<String>,
+    Path((vault_id, sha256_hex)): Path<(String, String)>,
     body: Bytes,
 ) -> Result<Json<ProtoResponse>, ApiError> {
-    let (pk, bearer, sig) = auth_headers(&headers)?;
-    verify_signed(&state, &pk, &body, &sig)?;
-    let _ = bearer_to_username(&state, &bearer)?;
-
-    let sha256 = hex::decode(&sha256_hex)
-        .map_err(|_| ApiError::bad_request("sha256 not hex"))?;
-    let sha256: [u8; 32] = sha256
-        .try_into()
-        .map_err(|_| ApiError::bad_request("sha256 not 32 bytes"))?;
-
-    // `body` is the ciphertext.  The signature is over the body
-    // bytes; the URL path carries the sha256.
+    validate_vault_id(&vault_id)?;
+    let sha256 = parse_sha256(&sha256_hex)?;
     state.storage.lock()
-        .put_blob(&sha256, &body)
-        .map_err(ApiError::from)?;
+        .put_blob(&vault_id, &sha256, &body)?;
     Ok(Json(ProtoResponse::Ok { message: Some("stored".into()) }))
 }
 
 async fn get_blob(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(sha256_hex): Path<String>,
+    Path((vault_id, sha256_hex)): Path<(String, String)>,
 ) -> Result<Json<ProtoResponse>, ApiError> {
-    let (pk, bearer, sig) = auth_headers(&headers)?;
-    // The signature for a GET covers an empty body.  We still
-    // need the bearer to authenticate the caller.
-    verify_signed(&state, &pk, &[], &sig)?;
-    let _ = bearer_to_username(&state, &bearer)?;
-
-    let sha256 = hex::decode(&sha256_hex)
-        .map_err(|_| ApiError::bad_request("sha256 not hex"))?;
-    let sha256: [u8; 32] = sha256
-        .try_into()
-        .map_err(|_| ApiError::bad_request("sha256 not 32 bytes"))?;
-
-    let ciphertext = state.storage.lock()
-        .get_blob(&sha256)
-        .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError::not_found("blob not found"))?;
+    validate_vault_id(&vault_id)?;
+    let sha256 = parse_sha256(&sha256_hex)?;
+    let storage = state.storage.lock();
+    let ciphertext = storage.get_blob(&vault_id, &sha256)?
+        .ok_or_else(|| ApiError::bad_request("blob not found"))?;
     Ok(Json(ProtoResponse::BlobResp { ciphertext }))
+}
+
+// -- helpers ---------------------------------------------------------------
+
+/// Vault ids are url path segments.  Constrain to a sensible
+/// charset so we don't have to worry about path traversal or
+/// control characters in SQL.
+fn validate_vault_id(id: &str) -> Result<(), ApiError> {
+    if id.is_empty() || id.len() > 64 {
+        return Err(ApiError::bad_request("vault_id must be 1..=64 chars"));
+    }
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(ApiError::bad_request(
+            "vault_id must match [A-Za-z0-9_-]+",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_sha256(hex_str: &str) -> Result<[u8; 32], ApiError> {
+    let bytes = hex::decode(hex_str)
+        .map_err(|_| ApiError::bad_request("sha256 not hex"))?;
+    bytes.try_into()
+        .map_err(|_| ApiError::bad_request("sha256 not 32 bytes"))
 }

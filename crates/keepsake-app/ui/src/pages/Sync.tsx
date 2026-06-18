@@ -5,7 +5,8 @@ import { showToast } from "../state";
 
 export function SyncPage() {
   const [url, setUrl] = createSignal(state.syncUrl());
-  const [busy, setBusy] = createSignal<"" | "register" | "push" | "pull">("");
+  const [vaultId, setVaultId] = createSignal("personal");
+  const [busy, setBusy] = createSignal<"" | "push" | "pull">("");
   const [status, setStatus] = createSignal<string>("");
 
   async function save(e: Event) {
@@ -20,24 +21,11 @@ export function SyncPage() {
     }
   }
 
-  async function register() {
-    setBusy("register");
-    try {
-      await api.syncRegister(url());
-      showToast("ok", "Registered with server");
-      setStatus("registered");
-    } catch (e) {
-      showToast("err", String(e));
-    } finally {
-      setBusy("");
-    }
-  }
-
   async function pull() {
     setBusy("pull");
     try {
-      const n = await api.syncPull(url());
-      showToast("ok", `Pulled ${n} change(s)`);
+      const n = await api.syncPull(url(), vaultId());
+      showToast("ok", `Pulled ${n} record(s)`);
       setStatus(`pulled ${n}`);
     } catch (e) {
       showToast("err", String(e));
@@ -49,7 +37,7 @@ export function SyncPage() {
   async function push() {
     setBusy("push");
     try {
-      const n = await api.syncPush(url());
+      const n = await api.syncPush(url(), vaultId());
       showToast("ok", `Pushed ${n} record(s)`);
       setStatus(`pushed ${n}`);
     } catch (e) {
@@ -65,9 +53,9 @@ export function SyncPage() {
         <div>
           <h1 class="page-title">⇄ Sync</h1>
           <p class="page-sub">
-            Configure the self-hosted sync server.  All data
-            remains end-to-end-encrypted; the server only
-            stores ciphertext.
+            End-to-end-encrypted.  The server stores ciphertext;
+            the shared passphrase (or your personal master) is
+            the only thing protecting the data.
           </p>
         </div>
       </header>
@@ -83,17 +71,18 @@ export function SyncPage() {
               onInput={(e) => setUrl(e.currentTarget.value)}
             />
           </div>
+          <div class="form-field">
+            <label>vault id</label>
+            <input
+              type="text"
+              placeholder="personal"
+              value={vaultId()}
+              onInput={(e) => setVaultId(e.currentTarget.value)}
+            />
+          </div>
           <div class="form-actions">
             <button type="submit" class="btn btn-primary" disabled={busy() !== ""}>
               Save
-            </button>
-            <button
-              type="button"
-              class="btn"
-              onClick={register}
-              disabled={busy() !== ""}
-            >
-              {busy() === "register" ? "Registering…" : "Register"}
             </button>
             <button
               type="button"

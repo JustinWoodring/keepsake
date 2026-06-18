@@ -180,23 +180,15 @@ async fn rewrite_audit_chain(
     session::rewrite_audit_chain(&state).map_err(|e| e.to_string())
 }
 
-/// Register the current user with a sync server (idempotent).
-#[tauri::command]
-async fn sync_register(
-    state: State<'_, AppState>,
-    server_url: String,
-) -> Result<(), String> {
-    session::sync_register(&state, server_url).map_err(|e| e.to_string())
-}
-
 /// Push every local record to the sync server.  Returns the
 /// number of records pushed.
 #[tauri::command]
 async fn sync_push(
     state: State<'_, AppState>,
     server_url: String,
+    vault_id: String,
 ) -> Result<usize, String> {
-    session::sync_push(&state, server_url).map_err(|e| e.to_string())
+    session::sync_push(&state, server_url, vault_id).map_err(|e| e.to_string())
 }
 
 /// Pull changes from the sync server and apply them locally.
@@ -205,8 +197,9 @@ async fn sync_push(
 async fn sync_pull(
     state: State<'_, AppState>,
     server_url: String,
+    vault_id: String,
 ) -> Result<usize, String> {
-    session::sync_pull(&state, server_url).map_err(|e| e.to_string())
+    session::sync_pull(&state, server_url, vault_id).map_err(|e| e.to_string())
 }
 
 /// Add a new user to this device's vault.
@@ -325,7 +318,6 @@ pub fn run() {
             configure_sync,
             record_titles,
             rewrite_audit_chain,
-            sync_register,
             sync_push,
             sync_pull,
             default_path,

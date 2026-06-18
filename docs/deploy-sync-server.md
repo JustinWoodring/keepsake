@@ -83,7 +83,7 @@ That's it. Below is the rationale and the operational details.
 ```
 +-------------+         HTTPS          +---------------+        HTTP          +-------------------+
 |  keepsake   |  ------------------->  |  nginx        |  ---------------->   |  keepsake-server  |
-|  desktop    |   POST /v1/sync/*    |  (TLS term)   |   127.0.0.1:8484    |  axum + SQLite     |
+|  desktop    |   POST /v1/vaults/.. |  (TLS term)   |   127.0.0.1:8484    |  axum + SQLite     |
 |  or CLI     |                       |               |                       |                   |
 +-------------+                       +---------------+                       +-------------------+
                                                                                        |
@@ -92,25 +92,47 @@ That's it. Below is the rationale and the operational details.
                                                                           (encrypted payloads only)
 ```
 
-The server **never** sees plaintext.  Every request body is
-JSON; the `payload` field of each `Change` is the AEAD
-ciphertext of the record (XChaCha20-Poly1305 keyed by the
-user's master key, nonce 24 bytes, AAD `keepsake/sync/payload/v1`).
-The server stores opaque bytes and forwards them.
+The server is a **dumb encrypted blob store**.  It never sees
+plaintext, never holds per-user state, and does not authenticate
+clients.  The only access boundary is the `vault_id` URL segment.
 
-Authentication is per-user Ed25519 envelope signatures on every
-authenticated request, plus short-lived bearer tokens (24h TTL)
-that gate the actual data endpoints.
+### How it works
+
+* Each **vault** is a shared encrypted space.  Everyone who knows
+  the vault's passphrase can read and write to it; the server has
+  no idea who they are.
+* The vault's encryption key is derived from the shared
+  passphrase + `vault_id` using Argon2id (client-side, in
+  `keepsake-core`).  Same passphrase + same `vault_id` ⇒ same
+  key, on every device, with no key exchange.
+* Records are pushed as opaque AEAD ciphertext keyed by that
+  shared key.  The server stores the bytes, a `(ts_millis,
+  actor)` ordering tuple, and a per-actor lamport clock.
+* Pull returns either the **current state** (one row per record,
+  LWW-picked by `(ts_millis, actor)`) when `since` is empty, or
+  the **change feed since** a vector clock when `since` is set.
+  No merge happens on the server — the client applies LWW /
+  per-text CRDT logic locally.
+* Blobs (attachments) are addressed by SHA-256 of the encrypted
+  ciphertext, scoped to the vault.  `PUT /v1/vaults/:id/blobs/:sha256`
+  is idempotent.
+
+The server **never** has any way to decrypt a payload, so a
+server compromise leaks ciphertext and metadata (lamport clocks,
+actor IDs, change counts) but not vault content.
 
 ## Server configuration
 
-The server takes three env vars (all optional):
+The server takes two env vars (both optional):
 
 | Var | Default | Notes |
 |---|---|---|
 | `KEEPSAKE_ADDR` | `127.0.0.1:8484` | Listen address. Keep this on localhost; nginx fronts it. |
 | `KEEPSAKE_DB` | `./keepsake-server.db` | SQLite path. Use `/var/lib/keepsake/server.db` in production. |
-| `KEEPSAKE_TLS` | unset | Setting this to `1` triggers a log warning reminding you to put nginx/caddy in front. The Rust binary does not terminate TLS. |
+
+There is no `KEEPSAKE_TLS` env var, no auth token config, no
+registration flag.  The Rust binary does not terminate TLS; put
+nginx or caddy in front of it.
 
 ## Host requirements
 
@@ -258,22 +280,26 @@ If that returns `ok`, the server is up and reachable over TLS.
 
 1. Open Keepsake on the desktop.
 2. Go to **Sync** in the sidebar.
-3. Enter `https://sync.example.com` in the **server base URL** field.
-4. Click **Save**.
-5. Click **Register** (idempotent — safe to repeat).
-6. Click **Push** to upload every local record.
-7. Repeat on the second device.  **Pull** to fetch.
+3. Enter `https://sync.example.com` in the **server URL** field.
+4. Enter a **vault id** (any string you and your collaborators
+   agree on, e.g. `family` or `team-shared`).  The vault id is
+   the only access boundary on the server.
+5. Enter the shared **passphrase** in the unlock flow — this
+   derives the vault's AEAD key client-side.
+6. Click **Push** to upload every local change.
+7. Repeat on the second device, entering the same server URL,
+   vault id, and passphrase.  **Pull** to fetch.
 
 The same flow works on the CLI:
 
 ```bash
-keepsake sync register --server https://sync.example.com
-keepsake sync push     --server https://sync.example.com
-keepsake sync pull     --server https://sync.example.com
+keepsake unlock                  # enter the shared passphrase
+keepsake sync push --server https://sync.example.com --vault family
+keepsake sync pull --server https://sync.example.com --vault family
 ```
 
-You'll need to unlock the vault first (`keepsake unlock` or
-the `unlock` REPL command).
+If `--server` and `--vault` are omitted, the CLI prompts
+interactively.
 
 ## Operations
 
@@ -281,14 +307,14 @@ the `unlock` REPL command).
 
 The server's only state is `server.db`.  It contains:
 
-* **Public** data: usernames, vector clocks, change counts.
+* **Public** data: vault ids, vector clocks, change counts,
+  actor IDs.
 * **Encrypted** data: AEAD-encrypted record payloads (the
   server can't read these), opaque blobs.
-* **Sessions**: bearer tokens, expiries.
 
 A nightly `cp /var/lib/keepsake/server.db /backups/keepsake-$(date +%F).db`
 is enough.  Encrypted payloads in the DB are useless to anyone
-who doesn't have the user's master key, so the backup file
+who doesn't know the shared passphrase, so the backup file
 itself is safe to keep around (e.g. encrypted with age/gpg at
 rest, or stored in an encrypted backup target).
 
@@ -359,42 +385,54 @@ use.
 
 ## Threat model recap
 
-* **Confidentiality**: payloads are AEAD-encrypted with the
-  user's master key before leaving the device.  The server
-  stores opaque ciphertext.  TLS protects data in transit.
-* **Authentication**: every authenticated request carries
-  an Ed25519 signature over the JSON body, verified against
-  the user's envelope public key.  Bearer tokens are 256-bit
-  random, 24h TTL, and stored in SQLite.
-* **Integrity**: the client signs every request; the server
-  verifies.  A modified or replayed request fails the
-  signature check.
+* **Confidentiality**: payloads are AEAD-encrypted (XChaCha20-Poly1305)
+  with a key derived from the shared passphrase + `vault_id`
+  (Argon2id → HKDF) before leaving the device.  The server stores
+  opaque ciphertext.  TLS protects data in transit.  A server
+  compromise leaks ciphertext, lamport clocks, and actor IDs —
+  not vault content.
+* **Authentication of *readers***: the server does not authenticate
+  clients.  Anyone who knows the `vault_id` *and* the shared
+  passphrase can read and write the vault.  This is the intended
+  design — the server is a dumb blob store, and membership is
+  controlled entirely by the passphrase.  Treat the vault id
+  the same way you'd treat a public channel name and the
+  passphrase the way you'd treat a shared key.
+* **Integrity**: every `Change` payload is an AEAD ciphertext,
+  so a server cannot tamper with the contents without invalidating
+  the MAC.  A malicious server could *drop* or *reorder* changes;
+  the client detects this via vector-clock comparison and refetches
+  the current state on divergence.
 * **Availability**: this is one VPS.  If it goes down, sync
   stops; local vaults continue to work.  For multi-region
   availability, the server would need to be replicated
   (out of scope for v1).
 * **Server compromise**: the attacker gets ciphertext, vector
-  clocks, and session metadata.  They cannot decrypt any
-  payload without each user's master key.  They can deny
-  service by deleting the database.  They can impersonate
-  the server and feed forged changes to clients, but the
-  client-side CRDT layer rejects forged changes whose
-  signature doesn't match the user's envelope public key.
+  clocks, vault ids, and actor IDs.  They cannot decrypt any
+  payload without each vault's shared passphrase.  They can deny
+  service by deleting the database.  They can impersonate the
+  server and feed forged changes to clients, but AEAD MACs on
+  the payloads make forged changes undecryptable.
 
 ## What this guide doesn't cover
 
-* **Multi-device key management**: every device has the same
-  master key (derived from the user's password).  Adding
-  multiple users on a single vault works (`keepsake add-user`),
-  but each user has their own master key and their own
-  encryption scope.  Cross-user sync is not currently
-  supported — the server treats every user as a separate
-  vault owner.
-* **Conflict resolution across users**: the CRDT layer
-  (LWW per record, per-text CRDT) handles the case where
-  the *same* user edits the same record on two devices.  It
-  does not yet handle the case where two *different* users
-  edit the same record.  In practice this is a v2 problem.
+* **Vault discovery**: there is no "list of vaults" endpoint.
+  Each device must be told the `vault_id` and passphrase
+  out-of-band.  The server treats every `vault_id` as a valid
+  namespace and will happily accept garbage ids; that is by
+  design.
+* **Per-user key management**: every member of a shared vault
+  derives the same vault key from the same passphrase.  Adding
+  or removing a member is a passphrase rotation.  The old
+  passphrase's ciphertext is no longer readable; clients that
+  still hold the old passphrase can read old changes but will
+  not see new ones.
+* **Per-user conflict resolution across users**: the CRDT layer
+  (LWW per record, per-text CRDT) handles the case where the
+  *same* member edits the same record on two devices.  It does
+  not yet handle the case where two *different* members edit
+  the same record simultaneously — the first LWW writer wins
+  across the whole vault.  In practice this is a v2 problem.
 * **Sync at the record type level**: the server stores
   ciphertext for every record type.  The client pushes and
   pulls everything.  Per-type sync (e.g. "sync only notes")
