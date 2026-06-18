@@ -61,12 +61,12 @@ pub async fn run(path: &std::path::Path, username: Option<String>, session: &mut
     )?;
     let _ = vault;
 
-    *session = Some(keepsake_core::session::Session {
-        path: path.to_path_buf(),
+    *session = Some(keepsake_core::session::Session::new(
+        path.to_path_buf(),
         vault,
         master,
         username,
-    });
+    )?);
 
     println!("initialized vault at {}", path.display());
     Ok(())

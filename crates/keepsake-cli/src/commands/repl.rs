@@ -171,12 +171,12 @@ fn unlock_with(
         None,
         None,
     )?;
-    *session = Some(keepsake_core::session::Session {
-        path: path.to_path_buf(),
+    *session = Some(keepsake_core::session::Session::new(
+        path.to_path_buf(),
         vault,
         master,
-        username: username.clone(),
-    });
+        username.clone(),
+    )?);
     eprintln!("unlocked as {username}");
     Ok(())
 }

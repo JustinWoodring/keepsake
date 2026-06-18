@@ -202,6 +202,50 @@ async fn sync_pull(
     session::sync_pull(&state, server_url, vault_id).map_err(|e| e.to_string())
 }
 
+/// Set up (or rotate) the shared sync setup for `vault_id`.
+/// Seals the passphrase inside the vault.
+#[tauri::command]
+async fn setup_shared_sync(
+    state: State<'_, AppState>,
+    vault_id: String,
+    passphrase: String,
+) -> Result<(), String> {
+    session::setup_shared_sync(&state, vault_id, passphrase).map_err(|e| e.to_string())
+}
+
+/// Reveal the shared sync setup for `vault_id`.  Returns
+/// `(vault_id, passphrase)`.  The user can copy this to
+/// another device to configure sync there.
+#[tauri::command]
+async fn reveal_shared_sync(
+    state: State<'_, AppState>,
+    vault_id: String,
+) -> Result<(String, String), String> {
+    session::reveal_shared_sync(&state, vault_id).map_err(|e| e.to_string())
+}
+
+/// Delete the shared sync setup for `vault_id`.
+#[tauri::command]
+async fn delete_shared_sync(
+    state: State<'_, AppState>,
+    vault_id: String,
+) -> Result<(), String> {
+    session::delete_shared_sync(&state, vault_id).map_err(|e| e.to_string())
+}
+
+/// List the vault ids that have a shared sync setup on this
+/// device.  Used by the Sync page to populate the dropdown.
+#[tauri::command]
+async fn list_shared_syncs(
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let guard = state.session.lock();
+    let session = guard.as_ref().ok_or_else(|| {
+        keepsake_core::Error::Locked.to_string()
+    })?;
+    session.vault.list_shared_syncs().map_err(|e| e.to_string())
+}
+
 /// Add a new user to this device's vault.
 #[tauri::command]
 async fn add_user(
@@ -320,6 +364,10 @@ pub fn run() {
             rewrite_audit_chain,
             sync_push,
             sync_pull,
+            setup_shared_sync,
+            reveal_shared_sync,
+            delete_shared_sync,
+            list_shared_syncs,
             default_path,
         ])
         .run(tauri::generate_context!())

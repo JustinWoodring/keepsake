@@ -143,6 +143,13 @@ export const api = {
     invoke("sync_push", { serverUrl, vaultId }),
   syncPull: (serverUrl: string, vaultId: string): Promise<number> =>
     invoke("sync_pull", { serverUrl, vaultId }),
+  setupSharedSync: (vaultId: string, passphrase: string): Promise<void> =>
+    invoke("setup_shared_sync", { vaultId, passphrase }),
+  revealSharedSync: (vaultId: string): Promise<[string, string]> =>
+    invoke("reveal_shared_sync", { vaultId }),
+  deleteSharedSync: (vaultId: string): Promise<void> =>
+    invoke("delete_shared_sync", { vaultId }),
+  listSharedSyncs: (): Promise<string[]> => invoke("list_shared_syncs"),
 
   exportBundle:  (passphrase: string): Promise<number[]> =>
     invoke("export_bundle", { passphrase }),

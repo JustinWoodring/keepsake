@@ -25,7 +25,7 @@ pub const ED25519_SIG_LEN: usize = 64;
 pub const ATTACHMENT_INLINE_MAX: usize = 256 * 1024;
 
 /// Current vault schema version.  Bump on breaking schema changes.
-pub const VAULT_SCHEMA_VERSION: u32 = 1;
+pub const VAULT_SCHEMA_VERSION: u32 = 2;
 
 /// Default location of the vault file for the current OS.
 pub fn default_vault_path() -> PathBuf {

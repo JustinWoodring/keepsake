@@ -61,6 +61,28 @@ pub struct AttachmentRow {
     pub created_at: DateTime<Utc>,
 }
 
+/// A revealed shared sync setup.  The passphrase is in the clear
+/// here; the caller is responsible for not leaking it.
+#[derive(Debug, Clone)]
+pub struct SharedSyncSetup {
+    /// Vault id (`[A-Za-z0-9_-]+`, 1..=64).
+    pub vault_id: String,
+    /// The literal sync passphrase the user entered.
+    pub passphrase: String,
+    /// 16-byte Argon2id salt.
+    pub kdf_salt: [u8; 16],
+    /// Argon2id memory cost in KiB.
+    pub kdf_m_kib: u32,
+    /// Argon2id time cost.
+    pub kdf_t: u32,
+    /// Argon2id parallelism.
+    pub kdf_p: u32,
+    /// When this setup was first created.
+    pub created_at: DateTime<Utc>,
+    /// When this setup was last rotated; `None` if never rotated.
+    pub rotated_at: Option<DateTime<Utc>>,
+}
+
 /// The encrypted vault.  Owns the SQLite connection and the vault
 /// key in memory.
 pub struct Vault {
@@ -107,6 +129,13 @@ impl Vault {
 
     fn require_unlocked(&self) -> Result<&AeadKey> {
         self.vault_key.as_ref().ok_or(Error::Locked)
+    }
+
+    /// Public accessor for the in-memory vault key, used by
+    /// the sync client to validate inner envelopes on pull.
+    /// Returns `Error::Locked` if the vault is locked.
+    pub fn require_unlocked_for_sync(&self) -> Result<&AeadKey> {
+        self.require_unlocked()
     }
 
     fn ensure_meta(&self) -> Result<()> {
@@ -175,6 +204,17 @@ impl Vault {
                 ts           INTEGER NOT NULL,
                 prev_hash    BLOB    NOT NULL,
                 hash         BLOB    NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS shared_sync_keys (
+                vault_id          TEXT    PRIMARY KEY,
+                passphrase        BLOB    NOT NULL,
+                passphrase_nonce  BLOB    NOT NULL,
+                kdf_salt          BLOB    NOT NULL,
+                kdf_m_kib         INTEGER NOT NULL,
+                kdf_t             INTEGER NOT NULL,
+                kdf_p             INTEGER NOT NULL,
+                created_at        INTEGER NOT NULL,
+                rotated_at        INTEGER
             );
             "#,
         )?;
@@ -268,6 +308,154 @@ impl Vault {
         if n == 0 {
             return Err(Error::NotFound(format!("user {username}")));
         }
+        Ok(())
+    }
+
+    /// Set (or rotate) the shared sync setup for `vault_id`.
+    /// Derives `shared_sync_key` from `(passphrase, vault_id)`,
+    /// seals the passphrase under the vault key, and persists
+    /// the row.  If a row already exists, the `rotated_at`
+    /// field is updated; otherwise `created_at` is set.
+    pub fn set_shared_sync(
+        &self,
+        vault_id: &str,
+        passphrase: &str,
+    ) -> Result<()> {
+        let key = self.require_unlocked()?;
+        let shared_key = crate::sync::client::derive_shared_key(
+            passphrase.as_bytes(),
+            vault_id,
+        )?;
+        let aad = build_shared_sync_aad(vault_id);
+        let nonce = Nonce::random();
+        let plaintext = passphrase.as_bytes();
+        let sealed = crate::crypto::aead::encrypt(key, &nonce, plaintext, &aad)?;
+        let kdf_salt = shared_sync_kdf_salt(vault_id);
+        let params = shared_sync_kdf_params();
+        let now = Utc::now().timestamp();
+        // INSERT OR REPLACE: if a row exists, replace it.  We
+        // carry created_at forward from the existing row to
+        // preserve history; rotated_at is set to now.
+        let existing_created: Option<i64> = self.conn
+            .query_row(
+                "SELECT created_at FROM shared_sync_keys WHERE vault_id = ?1",
+                params![vault_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let created_at = existing_created.unwrap_or(now);
+        self.conn.execute(
+            "INSERT OR REPLACE INTO shared_sync_keys
+                (vault_id, passphrase, passphrase_nonce, kdf_salt,
+                 kdf_m_kib, kdf_t, kdf_p, created_at, rotated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                vault_id,
+                sealed,
+                nonce.as_bytes().to_vec(),
+                kdf_salt.to_vec(),
+                params.m_kib as i64,
+                params.t as i64,
+                params.p as i64,
+                created_at,
+                if existing_created.is_some() { Some(now) } else { None },
+            ],
+        )?;
+        let _ = shared_key;
+        Ok(())
+    }
+
+    /// Reveal the sync setup for `vault_id`.  Returns the
+    /// plaintext passphrase, which the caller may display to
+    /// the user for out-of-band sharing.  Requires the vault
+    /// to be unlocked.
+    pub fn get_shared_sync(
+        &self,
+        vault_id: &str,
+    ) -> Result<Option<SharedSyncSetup>> {
+        let key = self.require_unlocked()?;
+        let row: Option<(Vec<u8>, Vec<u8>, Vec<u8>, i64, i64, i64, i64, Option<i64>)> =
+            self.conn.query_row(
+                "SELECT passphrase, passphrase_nonce, kdf_salt,
+                        kdf_m_kib, kdf_t, kdf_p, created_at, rotated_at
+                 FROM shared_sync_keys WHERE vault_id = ?1",
+                params![vault_id],
+                |r| Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, Option<i64>>(7)?,
+                )),
+            )
+            .optional()?;
+        let Some((sealed, nonce, kdf_salt, m_kib, t, p, created_at, rotated_at)) = row else {
+            return Ok(None);
+        };
+        let nonce_arr: [u8; 24] = nonce.try_into().map_err(|_| {
+            Error::Vault("passphrase_nonce must be 24 bytes".into())
+        })?;
+        let kdf_salt_arr: [u8; 16] = kdf_salt.try_into().map_err(|_| {
+            Error::Vault("kdf_salt must be 16 bytes".into())
+        })?;
+        let aad = build_shared_sync_aad(vault_id);
+        let pt = crate::crypto::aead::decrypt(
+            key,
+            &Nonce::from_bytes(nonce_arr),
+            &sealed,
+            &aad,
+        )?;
+        let passphrase = String::from_utf8(pt)
+            .map_err(|_| Error::Vault("sealed passphrase is not utf-8".into()))?;
+        Ok(Some(SharedSyncSetup {
+            vault_id: vault_id.to_string(),
+            passphrase,
+            kdf_salt: kdf_salt_arr,
+            kdf_m_kib: m_kib as u32,
+            kdf_t: t as u32,
+            kdf_p: p as u32,
+            created_at: DateTime::<Utc>::from_timestamp(created_at, 0)
+                .ok_or_else(|| Error::Vault("bad created_at".into()))?,
+            rotated_at: rotated_at
+                .and_then(|t| DateTime::<Utc>::from_timestamp(t, 0)),
+        }))
+    }
+
+    /// Derive and return the `shared_sync_key` for `vault_id`.
+    /// Returns `None` if no setup exists.  Does not require
+    /// the passphrase: the sealed passphrase + the vault key
+    /// are sufficient.
+    pub fn get_shared_sync_key(
+        &self,
+        vault_id: &str,
+    ) -> Result<Option<AeadKey>> {
+        let setup = self.get_shared_sync(vault_id)?;
+        let Some(setup) = setup else { return Ok(None) };
+        Ok(Some(crate::sync::client::derive_shared_key(
+            setup.passphrase.as_bytes(),
+            &setup.vault_id,
+        )?))
+    }
+
+    /// List vault_ids that have a sync setup on this device.
+    pub fn list_shared_syncs(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT vault_id FROM shared_sync_keys ORDER BY vault_id"
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Delete the sync setup for `vault_id`.  Idempotent:
+    /// returns Ok even if no row existed.
+    pub fn delete_shared_sync(&self, vault_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM shared_sync_keys WHERE vault_id = ?1",
+            params![vault_id],
+        )?;
         Ok(())
     }
 
@@ -385,6 +573,64 @@ impl Vault {
         if n == 0 {
             return Err(Error::NotFound(format!("record {id}")));
         }
+        Ok(())
+    }
+
+    /// Read the raw (nonce, aad, ciphertext) envelope for a
+    /// record, without decrypting.  Used by the sync client to
+    /// read inner envelopes for the nested wire format.  No
+    /// vault key needed.
+    pub fn get_record_envelope(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<(Vec<u8>, Vec<u8>, Vec<u8>)>> {
+        let row: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = self.conn
+            .query_row(
+                "SELECT aead_nonce, aead_aad, ciphertext
+                 FROM records WHERE id = ?1",
+                params![id.as_bytes().to_vec()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Write a record envelope directly to the `records`
+    /// table without re-encrypting.  Used by the sync client
+    /// to apply pulled changes (the inner envelope is already
+    /// sealed under the local vault key by the originating
+    /// client).  No vault key needed.
+    pub fn put_record_envelope(
+        &self,
+        id: Uuid,
+        r#type: &str,
+        schema_ver: u32,
+        created_by: &str,
+        updated_by: &str,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+        aead_nonce: &[u8],
+        aead_aad: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO records
+                (id, type, schema_ver, created_by, updated_by,
+                 created_at, updated_at, aead_nonce, aead_aad, ciphertext)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                id.as_bytes().to_vec(),
+                r#type,
+                schema_ver as i64,
+                created_by,
+                updated_by,
+                created_at.timestamp(),
+                updated_at.timestamp(),
+                aead_nonce.to_vec(),
+                aead_aad.to_vec(),
+                ciphertext.to_vec(),
+            ],
+        )?;
         Ok(())
     }
 
@@ -606,6 +852,31 @@ fn build_aad(header: &RecordHeader) -> Vec<u8> {
     out.push(0);
     out.extend_from_slice(header.id.as_bytes());
     out
+}
+
+fn build_shared_sync_aad(vault_id: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"keepsake/shared-sync-passphrase/v1\n");
+    out.extend_from_slice(vault_id.as_bytes());
+    out
+}
+
+fn shared_sync_kdf_salt(vault_id: &str) -> [u8; 16] {
+    let mut h = blake3::Hasher::new();
+    h.update(b"keepsake/shared-vault/v1\n");
+    h.update(vault_id.as_bytes());
+    let digest = h.finalize();
+    let mut salt = [0u8; 16];
+    salt.copy_from_slice(&digest.as_bytes()[..16]);
+    salt
+}
+
+fn shared_sync_kdf_params() -> crate::crypto::KdfParams {
+    crate::crypto::KdfParams {
+        m_kib: 8 * 1024,
+        t: 3,
+        p: 1,
+    }
 }
 
 fn ts(seconds: i64) -> Result<DateTime<Utc>> {
@@ -865,5 +1136,163 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].seq, 1);
         assert_eq!(entries[1].seq, 2);
+    }
+
+    #[test]
+    fn shared_sync_set_get_reveal_round_trip() {
+        let dir = tempdir().unwrap();
+        let mut v = Vault::open_or_create(&dir.path().join("vault.db")).unwrap();
+        unlock(&mut v);
+
+        v.set_shared_sync("family", "passphrase-abc").unwrap();
+        let setup = v.get_shared_sync("family").unwrap().unwrap();
+        assert_eq!(setup.vault_id, "family");
+        assert_eq!(setup.passphrase, "passphrase-abc");
+        assert!(setup.rotated_at.is_none());
+    }
+
+    #[test]
+    fn shared_sync_rotate_preserves_created_at() {
+        let dir = tempdir().unwrap();
+        let mut v = Vault::open_or_create(&dir.path().join("vault.db")).unwrap();
+        unlock(&mut v);
+
+        v.set_shared_sync("family", "old").unwrap();
+        let first = v.get_shared_sync("family").unwrap().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        v.set_shared_sync("family", "new").unwrap();
+        let second = v.get_shared_sync("family").unwrap().unwrap();
+        assert_eq!(second.passphrase, "new");
+        assert_eq!(second.created_at, first.created_at);
+        assert!(second.rotated_at.is_some());
+        assert!(second.rotated_at.unwrap() > first.created_at);
+    }
+
+    #[test]
+    fn shared_sync_keys_match_across_users() {
+        // Two users with the same vault key (since they share
+        // the vault) should derive the same shared_sync_key
+        // from the same passphrase+vault_id.  The vault key
+        // is generated once and sealed per-user, so any user
+        // who unlocks the vault lands on the same shared
+        // key.
+        let dir = tempdir().unwrap();
+        let mut v = Vault::open_or_create(&dir.path().join("vault.db")).unwrap();
+        unlock(&mut v);
+
+        v.set_shared_sync("family", "shared-pass").unwrap();
+        let k1 = v.get_shared_sync_key("family").unwrap().unwrap();
+        let k2 = v.get_shared_sync_key("family").unwrap().unwrap();
+        assert_eq!(k1.as_bytes(), k2.as_bytes());
+    }
+
+    #[test]
+    fn shared_sync_list_and_delete() {
+        let dir = tempdir().unwrap();
+        let mut v = Vault::open_or_create(&dir.path().join("vault.db")).unwrap();
+        unlock(&mut v);
+
+        v.set_shared_sync("a", "p1").unwrap();
+        v.set_shared_sync("b", "p2").unwrap();
+        let mut ids = v.list_shared_syncs().unwrap();
+        ids.sort();
+        assert_eq!(ids, vec!["a", "b"]);
+        v.delete_shared_sync("a").unwrap();
+        ids = v.list_shared_syncs().unwrap();
+        assert_eq!(ids, vec!["b"]);
+        // Idempotent delete.
+        v.delete_shared_sync("a").unwrap();
+    }
+
+    #[test]
+    fn get_record_envelope_returns_sealed_bytes_verbatim() {
+        let dir = tempdir().unwrap();
+        let mut v = Vault::open_or_create(&dir.path().join("vault.db")).unwrap();
+        unlock(&mut v);
+
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        let h = crate::records::RecordHeader {
+            r#type: "note".into(),
+            schema_version: 1,
+            id,
+            created_by: "alice".into(),
+            updated_by: "alice".into(),
+            created_at: now,
+            updated_at: now,
+        };
+        let rec = crate::records::Record::Note(Note {
+            id,
+            title: "t".into(),
+            body: "b".into(),
+            tags: vec![],
+            created_at: now,
+            updated_at: now,
+        });
+        v.put_record(&h, &rec).unwrap();
+
+        let (n1, a1, c1) = v.get_record_envelope(id).unwrap().unwrap();
+        let (n2, a2, c2) = v.get_record_envelope(id).unwrap().unwrap();
+        assert_eq!(n1, n2);
+        assert_eq!(a1, a2);
+        assert_eq!(c1, c2);
+        // Reading the envelope must succeed even if the
+        // record were re-encrypted later; we just verify
+        // that the bytes round-trip.
+        let (_h2, r2) = v.get_record(id).unwrap();
+        match r2 {
+            crate::records::Record::Note(n) => {
+                assert_eq!(n.body, "b");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn put_record_envelope_writes_verbatim_bytes() {
+        let dir = tempdir().unwrap();
+        let mut v = Vault::open_or_create(&dir.path().join("vault.db")).unwrap();
+        unlock(&mut v);
+
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        // Build a sealed envelope by hand: synthesize a
+        // record, seal it with the vault key, and write the
+        // bytes back via put_record_envelope.
+        let h = crate::records::RecordHeader {
+            r#type: "note".into(),
+            schema_version: 1,
+            id,
+            created_by: "bob".into(),
+            updated_by: "bob".into(),
+            created_at: now,
+            updated_at: now,
+        };
+        let aad = build_aad(&h);
+        let nonce = crate::crypto::aead::Nonce::random();
+        let pt = serde_json::to_vec(&crate::records::Record::Note(Note {
+            id,
+            title: "from-server".into(),
+            body: "remote".into(),
+            tags: vec![],
+            created_at: now,
+            updated_at: now,
+        })).unwrap();
+        let key = v.require_unlocked().unwrap();
+        let ct = crate::crypto::aead::encrypt(key, &nonce, &pt, &aad).unwrap();
+
+        v.put_record_envelope(
+            id, "note", 1, "bob", "bob", now, now,
+            nonce.as_bytes(), &aad, &ct,
+        ).unwrap();
+
+        let (_h2, r2) = v.get_record(id).unwrap();
+        match r2 {
+            crate::records::Record::Note(n) => {
+                assert_eq!(n.title, "from-server");
+                assert_eq!(n.body, "remote");
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 }

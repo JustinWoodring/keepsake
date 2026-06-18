@@ -267,7 +267,9 @@ pub fn rewrite_audit_chain(state: &AppState) -> Result<usize> {
 
 /// Push all local records to the given server URL.  Blocks
 /// the calling thread (the Tauri command) until done.  Returns
-/// the number of records pushed.
+/// the number of records pushed.  The shared sync key for
+/// `vault_id` must already be set up via
+/// [`setup_shared_sync`].
 pub fn sync_push(
     state: &AppState,
     server_url: String,
@@ -275,14 +277,15 @@ pub fn sync_push(
 ) -> Result<usize> {
     let mut guard = state.session.lock();
     let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
-    let key = keepsake_core::sync::client::derive_personal_vault_key(&session.master)?;
     let client = keepsake_core::sync::client::SyncClient::new(server_url, vault_id);
     tokio::runtime::Handle::current()
-        .block_on(client.push(&key, session))
+        .block_on(client.push(session))
 }
 
 /// Pull all remote records and apply them locally.  Returns
-/// the number of changes applied.
+/// the number of changes applied.  The shared sync key for
+/// `vault_id` must already be set up via
+/// [`setup_shared_sync`].
 pub fn sync_pull(
     state: &AppState,
     server_url: String,
@@ -290,10 +293,50 @@ pub fn sync_pull(
 ) -> Result<usize> {
     let mut guard = state.session.lock();
     let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
-    let key = keepsake_core::sync::client::derive_personal_vault_key(&session.master)?;
     let client = keepsake_core::sync::client::SyncClient::new(server_url, vault_id);
     tokio::runtime::Handle::current()
-        .block_on(client.pull(&key, session))
+        .block_on(client.pull(session))
+}
+
+/// Set up (or rotate) the shared sync setup for `vault_id`.
+/// The passphrase is sealed inside the vault; the derived
+/// `shared_sync_key` is cached in the session.
+pub fn setup_shared_sync(
+    state: &AppState,
+    vault_id: String,
+    passphrase: String,
+) -> Result<()> {
+    let mut guard = state.session.lock();
+    let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
+    session.vault.set_shared_sync(&vault_id, &passphrase)?;
+    session.refresh_shared_sync_keys()?;
+    Ok(())
+}
+
+/// Reveal the shared sync setup for `vault_id`.  Returns
+/// `(vault_id, passphrase)` so the user can copy them
+/// out-of-band to configure another device.
+pub fn reveal_shared_sync(
+    state: &AppState,
+    vault_id: String,
+) -> Result<(String, String)> {
+    let guard = state.session.lock();
+    let session = guard.as_ref().ok_or(keepsake_core::Error::Locked)?;
+    let setup = session.vault.get_shared_sync(&vault_id)?
+        .ok_or_else(|| keepsake_core::Error::NotFound(format!("shared sync '{vault_id}'")))?;
+    Ok((setup.vault_id, setup.passphrase))
+}
+
+/// Delete the shared sync setup for `vault_id`.  Idempotent.
+pub fn delete_shared_sync(
+    state: &AppState,
+    vault_id: String,
+) -> Result<()> {
+    let mut guard = state.session.lock();
+    let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
+    session.vault.delete_shared_sync(&vault_id)?;
+    session.refresh_shared_sync_keys()?;
+    Ok(())
 }
 
 /// List the usernames on this device (for the unlock picker).
@@ -442,12 +485,12 @@ pub fn import_to_new_vault(
         Some("(import)"),
         Some(&format!("{} records", payload.records.len())),
     )?;
-    Ok(keepsake_core::session::Session {
-        path: path.to_path_buf(),
+    Ok(keepsake_core::session::Session::new(
+        path.to_path_buf(),
         vault,
         master,
-        username: username.to_string(),
-    })
+        username.to_string(),
+    )?)
 }
 
 /// Add a new user to this device's vault.  The vault key is
@@ -734,12 +777,12 @@ pub fn build_new_session(
         Some("vault initialized"),
     )?;
     vault.append_audit(AuditOp::Unlock, username, None, None)?;
-    Ok(keepsake_core::session::Session {
-        path: path.to_path_buf(),
+    Ok(keepsake_core::session::Session::new(
+        path.to_path_buf(),
         vault,
         master,
-        username: username.to_string(),
-    })
+        username.to_string(),
+    )?)
 }
 
 /// Open an existing vault.
@@ -772,12 +815,12 @@ pub fn open_session(
     let mut vault = vault;
     vault.unlock(&vault_key)?;
     vault.append_audit(AuditOp::Unlock, username, None, None)?;
-    Ok(keepsake_core::session::Session {
-        path: path.to_path_buf(),
+    Ok(keepsake_core::session::Session::new(
+        path.to_path_buf(),
         vault,
         master,
-        username: username.to_string(),
-    })
+        username.to_string(),
+    )?)
 }
 
 fn random_device_id() -> [u8; 16] {

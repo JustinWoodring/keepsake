@@ -106,14 +106,20 @@ pub enum Command {
         reveal: bool,
     },
     /// Sync with a self-hosted server.  Subcommand is one of
-    /// `push` or `pull`.  `--vault` selects the vault id.
+    /// `setup`, `reveal`, `rotate`, `delete`, `list`, `push`,
+    /// `pull`.  `--vault` selects the vault id.  `--passphrase`
+    /// is used by `setup`/`rotate`; if omitted, the CLI
+    /// prompts interactively.
     Sync {
         #[arg(long)]
         server: Option<String>,
         #[arg(long)]
         vault: Option<String>,
-        /// Subcommand: push | pull
-        #[arg(default_value = "push")]
+        #[arg(long)]
+        passphrase: Option<String>,
+        /// Subcommand: setup | reveal | rotate | delete |
+        /// list | push | pull
+        #[arg(default_value = "list")]
         sub: String,
     },
     /// Export the vault to a `.ksk` file.
@@ -164,7 +170,7 @@ pub async fn dispatch(
         Command::Find { query }              => commands::find::run(path, query, session).await,
         Command::Links { id, direction }     => commands::links::run(path, id, direction, session).await,
         Command::Resolve { id, reveal }      => commands::resolve::run(path, id, reveal, session).await,
-        Command::Sync { server, vault, sub } => commands::sync::run(path, server, vault, sub, session).await,
+        Command::Sync { server, vault, passphrase, sub } => commands::sync::run(path, server, vault, passphrase, sub, session).await,
         Command::Export { out }              => commands::export::run(path, out, session).await,
         Command::Import { input }            => commands::import::run(path, input, session).await,
         Command::Audit { verify }            => commands::audit::run(path, verify, session).await,
