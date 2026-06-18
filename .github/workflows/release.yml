@@ -86,6 +86,14 @@ jobs:
         working-directory: crates/keepsake-app/ui
         run: npm ci
 
+      - name: Regenerate bundle icons
+        # Rebuild icon.icns / icon.ico / *.png from
+        # assets/source-icon.png so the CI artifacts
+        # always match the latest source art.
+        run: |
+          python3 -m pip install --quiet Pillow
+          python3 scripts/make-icons.py
+
       - name: Stamp the version from the tag
         # The bundled app's version field is read from
         # tauri.conf.json (and the keepsake-app Cargo.toml),
