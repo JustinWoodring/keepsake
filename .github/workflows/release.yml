@@ -93,10 +93,16 @@ jobs:
         # and Homebrew Python builds on the GH runners are
         # 'externally managed' (PEP 668), so we install into a
         # throwaway venv rather than pip-installing system-wide.
+        # On Windows the venv scripts live in .venv-icons\Scripts\
+        # rather than .venv-icons/bin/, so we let `python -m pip`
+        # do the install (it picks up the right path) and invoke
+        # the script via the venv's python.
         run: |
           python3 -m venv .venv-icons
-          .venv-icons/bin/pip install --quiet Pillow
-          .venv-icons/bin/python scripts/make-icons.py
+          .venv-icons/bin/python -m pip install --quiet Pillow || \
+            .venv-icons/Scripts/python -m pip install --quiet Pillow
+          .venv-icons/bin/python scripts/make-icons.py || \
+            .venv-icons/Scripts/python scripts/make-icons.py
 
       - name: Stamp the version from the tag
         # The bundled app's version field is read from
