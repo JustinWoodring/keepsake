@@ -28,19 +28,96 @@ works identically on POSIX shells and PowerShell.
 """
 from __future__ import annotations
 
+# IMPORTANT: this bootstrap block must run before any
+# `from PIL import Image` (or any other import that requires
+# Pillow).  We do the venv re-exec *before* importing
+# Pillow so the re-exec'd process is the one that ends up
+# importing it.  See `bootstrap_venv()`.
 import os
-import struct
 import subprocess
 import sys
-from io import BytesIO
 from pathlib import Path
 
-from PIL import Image
 
-SIZE = 1024
+def venv_python(venv_dir: Path) -> Path:
+    """Locate the python interpreter inside a venv created
+    with `python -m venv`.  Portable across POSIX
+    ('bin/python') and Windows ('Scripts/python.exe')."""
+    if os.name == "nt":
+        return venv_dir / "Scripts" / "python.exe"
+    return venv_dir / "bin" / "python"
+
+
+def ensure_venv(venv_dir: Path) -> Path:
+    """Create a venv if it doesn't exist and install Pillow
+    into it.  Returns the venv's python interpreter path."""
+    py = venv_python(venv_dir)
+    if not py.exists():
+        subprocess.check_call(
+            [sys.executable, "-m", "venv", str(venv_dir)],
+        )
+    subprocess.check_call(
+        [str(py), "-m", "pip", "install", "--quiet", "Pillow"],
+    )
+    return py
+
+
+def parse_in_venv(argv: list[str], root: Path) -> tuple[Path | None, list[str]]:
+    """Strip `--in-venv <path>` from argv; return the
+    parsed path (resolved against root) and the leftover
+    args."""
+    in_venv: Path | None = None
+    rest: list[str] = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--in-venv" and i + 1 < len(argv):
+            in_venv = (root / argv[i + 1]).resolve()
+            i += 2
+            continue
+        rest.append(a)
+        i += 1
+    return in_venv, rest
+
+
+def bootstrap_venv() -> None:
+    """Handle `--in-venv` re-exec before any heavy imports.
+    Raises SystemExit after the re-exec; otherwise
+    returns and the rest of the script proceeds."""
+    in_venv, rest = parse_in_venv(sys.argv[1:], ROOT)
+    if in_venv is None:
+        return
+    py = ensure_venv(in_venv)
+    if Path(sys.executable).resolve() == py.resolve():
+        return  # already inside the venv
+    rc = subprocess.call([str(py), __file__, *rest])
+    raise SystemExit(rc)
+
+
+# Run the venv bootstrap *before* importing PIL.  Any
+# failure here exits with a clear message instead of a
+# confusing ModuleNotFoundError.
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "assets" / "source-icon.png"
 ICON_DIR = ROOT / "crates" / "keepsake-app" / "src-tauri" / "icons"
+
+try:
+    bootstrap_venv()
+except SystemExit:
+    raise
+except Exception as e:
+    sys.stderr.write(f"venv bootstrap failed: {e}\n")
+    sys.exit(2)
+
+# Now safe to import PIL: either the outer python has it,
+# or we just re-exec'd inside the venv that does.
+from io import BytesIO  # noqa: E402
+
+import struct  # noqa: E402
+
+from PIL import Image  # noqa: E402
+
+SIZE = 1024
 
 
 def load_source() -> Image.Image:
@@ -137,69 +214,11 @@ def write_all_icons(source: Image.Image) -> None:
     print(f"wrote icons to {ICON_DIR}")
 
 
-def venv_python(venv_dir: Path) -> Path:
-    """Locate the python interpreter inside a venv created
-    with `python -m venv`.  Portable across POSIX
-    ('bin/python') and Windows ('Scripts/python.exe')."""
-    if os.name == "nt":
-        return venv_dir / "Scripts" / "python.exe"
-    return venv_dir / "bin" / "python"
-
-
-def ensure_venv(venv_dir: Path) -> Path:
-    """Create a venv if it doesn't exist and install Pillow
-    into it.  Returns the venv's python interpreter path."""
-    py = venv_python(venv_dir)
-    if not py.exists():
-        subprocess.check_call(
-            [sys.executable, "-m", "venv", str(venv_dir)],
-        )
-    # Install Pillow (idempotent; pip skips if already
-    # satisfied).
-    subprocess.check_call(
-        [str(py), "-m", "pip", "install", "--quiet", "Pillow"],
-    )
-    return py
-
-
-def reexec_in_venv(venv_dir: Path, remaining: list[str]) -> None:
-    """Re-execute this script inside the venv's python so
-    that `from PIL import Image` works regardless of
-    whether the outer python has Pillow installed.  Only
-    used on CI; locally the user usually has Pillow
-    system-wide.  `remaining` is the argv with the
-    `--in-venv <path>` flags already stripped, so the
-    re-exec'd process doesn't loop."""
-    venv_dir = Path(venv_dir).resolve()
-    py = ensure_venv(venv_dir)
-    if Path(sys.executable).resolve() == py.resolve():
-        return  # already running inside the venv
-    rc = subprocess.call([str(py), __file__, *remaining])
-    raise SystemExit(rc)
-
-
-def main(argv: list[str]) -> int:
-    # Parse --in-venv <path> off the front (if present),
-    # leaving any further args in `rest`.
-    in_venv: Path | None = None
-    rest: list[str] = []
-    i = 0
-    while i < len(argv):
-        a = argv[i]
-        if a == "--in-venv" and i + 1 < len(argv):
-            in_venv = (ROOT / argv[i + 1]).resolve()
-            i += 2
-            continue
-        rest.append(a)
-        i += 1
-
-    if in_venv is not None:
-        reexec_in_venv(in_venv, rest)
-
+def main() -> int:
     source = load_source()
     write_all_icons(source)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())
