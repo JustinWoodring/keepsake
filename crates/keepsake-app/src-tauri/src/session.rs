@@ -728,10 +728,21 @@ fn recover_from_sync_blocking(
             ))
         })?;
 
-    // Re-derive the user's master_key from their password
-    // and the KDF parameters from the server-fetched row.
+    // Re-derive the user's master_key from their password and
+    // the salt + parameters fetched from the server row.
+    // Note: we use `derive_master_key` (not
+    // `password_to_master_key`) because the latter generates
+    // a fresh random salt and discards the server's salt.
+    // Without the server salt, master_key won't match the
+    // master_key that originally sealed vault_key on the
+    // other device, and `unseal_vault_key` will fail with
+    // "decrypt: authentication failed".
     let params = keepsake_core::crypto::KdfParams::decode(&mine.kdf_params)?;
-    let (master, _salt) = password_to_master_key(password.as_bytes(), params)?;
+    let master = keepsake_core::crypto::derive_master_key(
+        password.as_bytes(),
+        &mine.kdf_salt,
+        params,
+    )?;
     let sealed = keepsake_core::identity::SealedVaultKey {
         nonce: mine.seal_nonce,
         ciphertext: mine.seal_ciphertext.clone(),
