@@ -303,25 +303,51 @@ fn apply_remote_change(shared_key: &AeadKey, session: &mut Session, ch: &Change)
     let record_id = ch.record_id.ok_or_else(|| {
         Error::Sync("change has no record_id; only record changes are supported in v1".into())
     })?;
-    let (aead_nonce, aead_aad, ciphertext) = unwrap_envelope(shared_key, &ch.payload)?;
+    let (aead_nonce, aead_aad, ciphertext) = match unwrap_envelope(shared_key, &ch.payload) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("[apply_remote_change] unwrap_envelope failed for record {record_id}: {e}");
+            return Err(e);
+        }
+    };
 
     // Build a RecordHeader from the inner AAD bytes.  The
     // AAD format is defined in `vault::build_aad`:
     //   "keepsake/record/v1\n" || type || 0x00 || schema_le || 0x00 || uuid
-    let header = decode_inner_aad(&aead_aad, record_id, &ch.author, ch.ts)?;
+    let header = match decode_inner_aad(&aead_aad, record_id, &ch.author, ch.ts) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("[apply_remote_change] decode_inner_aad failed for record {record_id}: {e}");
+            eprintln!("[apply_remote_change] aad bytes ({}): {:?}", aead_aad.len(), aead_aad);
+            return Err(e);
+        }
+    };
 
     // Validate: decrypt the inner with the local vault key
     // to make sure it's actually for this vault.  This is
     // defense in depth — a forged payload from the server
     // will fail to peel the local layer.
     let local_key = session.vault.require_unlocked_for_sync()?;
-    let plaintext = aead::decrypt(
+    let plaintext = match aead::decrypt(
         local_key,
         &Nonce::from_bytes(aead_nonce[..].try_into().unwrap()),
         &ciphertext,
         &aead_aad,
-    )?;
-    let rec: crate::records::Record = serde_json::from_slice(&plaintext)?;
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[apply_remote_change] inner AEAD decrypt failed for record {record_id}: {e}");
+            return Err(e);
+        }
+    };
+    let rec: crate::records::Record = match serde_json::from_slice(&plaintext) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[apply_remote_change] plaintext JSON parse failed for record {record_id}: {e}");
+            eprintln!("[apply_remote_change] plaintext bytes ({}): {plaintext:?}", plaintext.len());
+            return Err(e.into());
+        }
+    };
 
     // Now run the CRDT layer with the local vault acting as
     // the local side, and the remote plaintext as the
