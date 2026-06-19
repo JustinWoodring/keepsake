@@ -222,7 +222,8 @@ async fn sync_push(
     server_url: String,
     vault_id: String,
 ) -> Result<usize, String> {
-    session::sync_push(&state, server_url, vault_id)
+    let snapshot = state.clone_state();
+    session::sync_push(snapshot, server_url, vault_id)
         .await
         .map_err(|e| e.to_string())
 }

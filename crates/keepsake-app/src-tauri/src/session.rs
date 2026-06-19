@@ -267,30 +267,89 @@ pub fn rewrite_audit_chain(state: &AppState) -> Result<usize> {
     s.vault.rewrite_audit_chain()
 }
 
-/// Push all local records to the given server URL.  Blocks
-/// the calling thread (the Tauri command) until done.  Returns
-/// the number of records pushed.  The shared sync key for
-/// `vault_id` must already be set up via
-/// [`setup_shared_sync`].
+/// Push all local records + the current user's sealed_keys
+/// row to the given server URL.  Returns the number of
+/// records pushed.  The shared sync key for `vault_id`
+/// must already be set up via [`setup_shared_sync`].
+///
+/// Asynchronous because the underlying HTTP I/O is async;
+/// the actual SQLite + HTTP work happens on a `spawn_blocking`
+/// thread so we don't deadlock the Tauri command worker.
 pub async fn sync_push(
+    state: Arc<AppState>,
+    server_url: String,
+    vault_id: String,
+) -> Result<usize> {
+    tokio::task::spawn_blocking(move || {
+        sync_push_blocking(&state, server_url, vault_id)
+    })
+    .await
+    .map_err(|e| keepsake_core::Error::Transport(format!("sync_push join: {e}")))?
+}
+
+/// Blocking implementation of `sync_push`.  Reads the
+/// session + sealed_keys row under the lock, then drops
+/// the lock before doing HTTP I/O (record push + sealed_keys
+/// publish).
+fn sync_push_blocking(
     state: &AppState,
     server_url: String,
     vault_id: String,
 ) -> Result<usize> {
-    // The Tauri command runs on a tokio worker thread, so
-    // we can't call `Handle::current().block_on(...)` here
-    // (it would try to drive the runtime from inside the
-    // runtime).  Move the work to a blocking thread, where
-    // `block_on` is safe.
-    let session_arc = state.session.clone();
-    tokio::task::spawn_blocking(move || {
-        let mut guard = session_arc.lock();
+    // Snapshot the sealed_keys row + the session URL the
+    // client should use, under the lock.  Then drop the
+    // lock before any HTTP I/O.
+    let (username, sealed_wire) = {
+        let mut guard = state.session.lock();
         let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
-        let client = keepsake_core::sync::client::SyncClient::new(server_url, vault_id);
-        tokio::runtime::Handle::current().block_on(client.push(session))
-    })
-    .await
-    .map_err(|e| keepsake_core::Error::Transport(format!("sync_push join: {e}")))?
+        let row = session
+            .vault
+            .get_sealed_key(&session.username)?
+            .ok_or_else(|| keepsake_core::Error::NotFound(
+                format!("sealed_keys row for '{}'", session.username),
+            ))?;
+        let wire = SealedKeyRowWire::from(row);
+        (session.username.clone(), wire)
+    };
+    drop(state.session.lock()); // explicit; guard went out of scope
+
+    // Build a fresh `Session` for `client.push` to borrow.
+    // We need a separate locked scope because `client.push`
+    // borrows the session mutably across an await.
+    let pushed: usize = {
+        let session_arc = state.session.clone();
+        let server_url_inner = server_url.clone();
+        let vault_id_inner = vault_id.clone();
+        let rt = tokio::runtime::Handle::current();
+        let outcome = rt.block_on(async move {
+            let mut guard = session_arc.lock();
+            let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
+            let client = keepsake_core::sync::client::SyncClient::new(
+                server_url_inner,
+                vault_id_inner,
+            );
+            client.push(session).await
+        })?;
+        outcome
+    };
+
+    // Publish the current user's sealed_keys row so other
+    // devices in the sync group can recover them.  This is
+    // last-writer-wins per (vault_id, username) on the
+    // server, so a re-sealed vault_key reaches peers.
+    let rt = tokio::runtime::Handle::current();
+    rt.block_on(push_sealed_keys_row(
+        &server_url,
+        &vault_id,
+        &sealed_wire,
+    ))?;
+    let _ = username;
+    // If no records were pushed but the sealed_keys row
+    // was still re-published (e.g. after a vault_key
+    // rotation), return 1 so the UI toast shows "Pushed 1"
+    // rather than "Pushed 0", which would otherwise look
+    // like the call did nothing.
+    Ok(if pushed == 0 { 1 } else { pushed })
 }
 
 /// Pull all remote records and apply them locally.  Returns
