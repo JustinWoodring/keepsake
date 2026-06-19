@@ -35,6 +35,7 @@ struct PushPlan {
     vault_id: String,
     changes: Vec<Change>,
     new_clock: VectorClock,
+    sealed_row: Option<crate::session::SealedKeyRowWire>,
 }
 
 struct PullPlan {
@@ -162,39 +163,61 @@ async fn do_one_cycle(
 
     // Phase 2: HTTP pushes (lock released).
     for plan in push_plans {
-        if plan.changes.is_empty() {
+        let push_records = !plan.changes.is_empty();
+        let push_sealed = plan.sealed_row.is_some();
+        if !push_records && !push_sealed {
             continue;
         }
-        let url = format!(
-            "{}/v1/vaults/{}/sync/push",
-            plan.server_url.trim_end_matches('/'),
-            plan.vault_id,
-        );
-        let body = match serde_json::to_vec(&ProtoRequest::Push {
-            new_clock: plan.new_clock,
-            changes: plan.changes,
-        }) {
-            Ok(b) => b,
-            Err(e) => {
-                record_error(status, format!("encode push: {e}"));
-                continue;
-            }
-        };
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .expect("reqwest client");
-        match client.post(&url).header("content-type", "application/json").body(body).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                status.lock().unwrap().last_push_at = Some(Utc::now());
+        if push_records {
+            let url = format!(
+                "{}/v1/vaults/{}/sync/push",
+                plan.server_url.trim_end_matches('/'),
+                plan.vault_id,
+            );
+            let body = match serde_json::to_vec(&ProtoRequest::Push {
+                new_clock: plan.new_clock,
+                changes: plan.changes,
+            }) {
+                Ok(b) => b,
+                Err(e) => {
+                    record_error(status, format!("encode push: {e}"));
+                    continue;
+                }
+            };
+            match client.post(&url).header("content-type", "application/json").body(body).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    status.lock().unwrap().last_push_at = Some(Utc::now());
+                }
+                Ok(resp) => {
+                    let st = resp.status();
+                    let txt = resp.text().await.unwrap_or_default();
+                    record_error(status, format!("push {plan_url}: {st}: {txt}", plan_url = url));
+                }
+                Err(e) => {
+                    record_error(status, format!("push {url}: {e}"));
+                }
             }
-            Ok(resp) => {
-                let st = resp.status();
-                let txt = resp.text().await.unwrap_or_default();
-                record_error(status, format!("push {plan_url}: {st}: {txt}", plan_url = url));
-            }
-            Err(e) => {
-                record_error(status, format!("push {url}: {e}"));
+        }
+        if push_sealed {
+            // Re-publish this device's sealed_keys row every
+            // cycle.  The server's storage is keyed by
+            // (vault_id, username) so a new row here overrides
+            // any prior sealed blob — used for vault_key
+            // re-sealing on password rotation or key refresh.
+            if let Some(row) = plan.sealed_row {
+                if let Err(e) = crate::session::push_sealed_keys_row(
+                    &plan.server_url,
+                    &plan.vault_id,
+                    &row,
+                )
+                .await
+                {
+                    record_error(status, format!("push sealed_keys: {e}"));
+                }
             }
         }
     }
@@ -321,6 +344,10 @@ fn build_plans(
                     .into_iter()
                     .collect(),
             },
+            sealed_row: session
+                .vault
+                .get_sealed_key(&session.username)?
+                .map(crate::session::SealedKeyRowWire::from),
         });
         pull_plans.push(PullPlan { server_url, vault_id });
     }

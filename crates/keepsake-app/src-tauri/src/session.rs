@@ -374,7 +374,7 @@ pub struct SealedKeysListResp {
 pub async fn push_sealed_keys_row(
     server_url: &str,
     vault_id: &str,
-    row: &keepsake_core::vault::SealedKeyRow,
+    row: &SealedKeyRowWire,
 ) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -385,10 +385,9 @@ pub async fn push_sealed_keys_row(
         server_url.trim_end_matches('/'),
         vault_id,
     );
-    let wire = SealedKeyRowWire::from(row.clone());
     let resp = client
         .put(&url)
-        .json(&wire)
+        .json(row)
         .send()
         .await
         .map_err(|e| keepsake_core::Error::Transport(format!("push sealed_keys: {e}")))?;
@@ -466,11 +465,12 @@ pub fn setup_shared_sync(
     drop(guard);
     if let Some(server_url) = server_url {
         let rt = tokio::runtime::Handle::current();
+        let wire = SealedKeyRowWire::from(row);
         rt.block_on(async move {
             push_sealed_keys_row(
                 &server_url,
                 &vault_id_for_task,
-                &row,
+                &wire,
             )
             .await
         })?;
@@ -781,7 +781,7 @@ fn recover_from_sync_blocking(
 
     let vault_id_owned = vault_id.to_string();
     let server_url_owned = server_url.to_string();
-    let row_for_upload = row.clone();
+    let row_for_upload = SealedKeyRowWire::from(row.clone());
     let _ = rt.block_on(async move {
         let _ = push_sealed_keys_row(
             &server_url_owned,
@@ -864,7 +864,7 @@ pub fn add_user(
     if let Some(vault_id) = s.vault.get_shared_sync_vault_id()? {
         if let Some(setup) = s.vault.get_shared_sync(&vault_id)? {
             if let Some(server_url) = setup.server_url {
-                let row_for_upload = row.clone();
+                let row_for_upload = SealedKeyRowWire::from(row.clone());
                 let _ = tokio::runtime::Handle::current().block_on(async move {
                     let _ = push_sealed_keys_row(
                         &server_url,
