@@ -365,6 +365,19 @@ impl Vault {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
+    /// True iff a `sealed_keys` row exists for `username` on this
+    /// device.  Used by the sync merge to skip rows we already have
+    /// (in particular the local user's own row, which is the
+    /// authoritative source for that user's kdf_salt).
+    pub fn has_sealed_key(&self, username: &str) -> Result<bool> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sealed_keys WHERE username = ?1",
+            params![username],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// Delete a `sealed_keys` row (removes a user from this device).
     pub fn delete_sealed_key(&self, username: &str) -> Result<()> {
         let n = self.conn.execute(

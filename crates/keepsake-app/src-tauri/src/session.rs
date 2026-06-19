@@ -352,24 +352,94 @@ fn sync_push_blocking(
     Ok(if pushed == 0 { 1 } else { pushed })
 }
 
-/// Pull all remote records and apply them locally.  Returns
-/// the number of changes applied.  The shared sync key for
-/// `vault_id` must already be set up via
+/// Pull remote records and merge any new sealed_keys rows.
+/// Returns the number of records applied.  The shared sync
+/// key for `vault_id` must already be set up via
 /// [`setup_shared_sync`].
 pub async fn sync_pull(
+    state: Arc<AppState>,
+    server_url: String,
+    vault_id: String,
+) -> Result<usize> {
+    tokio::task::spawn_blocking(move || {
+        sync_pull_blocking(&state, server_url, vault_id)
+    })
+    .await
+    .map_err(|e| keepsake_core::Error::Transport(format!("sync_pull join: {e}")))?
+}
+
+/// Blocking implementation of `sync_pull`.  Pulls record
+/// changes from the server, then fetches any sealed_keys
+/// rows the server has that we don't yet have locally
+/// (e.g. rows for users added on other devices) and inserts
+/// them.  We never overwrite an existing local row — the
+/// local row is the authoritative source for each user's
+/// own kdf_salt.
+fn sync_pull_blocking(
     state: &AppState,
     server_url: String,
     vault_id: String,
 ) -> Result<usize> {
-    let session_arc = state.session.clone();
-    tokio::task::spawn_blocking(move || {
-        let mut guard = session_arc.lock();
-        let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
-        let client = keepsake_core::sync::client::SyncClient::new(server_url, vault_id);
-        tokio::runtime::Handle::current().block_on(client.pull(session))
+    // Step 1: pull record changes.  client.pull borrows the
+    // session mutably across an await, so we run it under a
+    // dedicated lock scope.
+    let records_applied: usize = {
+        let session_arc = state.session.clone();
+        let server_url_inner = server_url.clone();
+        let vault_id_inner = vault_id.clone();
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async move {
+            let mut guard = session_arc.lock();
+            let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
+            let client = keepsake_core::sync::client::SyncClient::new(
+                server_url_inner,
+                vault_id_inner,
+            );
+            client.pull(session).await
+        })?
+    };
+
+    // Step 2: merge any sealed_keys rows we don't have yet.
+    let sealed_keys_added = merge_sealed_keys_from_server(
+        state, &server_url, &vault_id,
+    )?;
+
+    // If nothing was applied but a sealed_keys row was
+    // added (e.g. another user added themselves on their
+    // device since our last pull), report 1 so the UI toast
+    // shows "Pulled 1" rather than "Pulled 0".
+    Ok(if records_applied == 0 && sealed_keys_added > 0 {
+        sealed_keys_added
+    } else {
+        records_applied
     })
-    .await
-    .map_err(|e| keepsake_core::Error::Transport(format!("sync_pull join: {e}")))?
+}
+
+/// Fetch the server's sealed_keys rows for `vault_id` and
+/// insert any we don't already have locally.  Returns the
+/// number of new rows inserted.  Best-effort: network or
+/// parse errors are returned to the caller; per-row insert
+/// errors are logged and skipped so a single bad row doesn't
+/// block the rest.
+fn merge_sealed_keys_from_server(
+    state: &AppState,
+    server_url: &str,
+    vault_id: &str,
+) -> Result<usize> {
+    let rt = tokio::runtime::Handle::current();
+    let rows = rt.block_on(fetch_sealed_keys_rows(server_url, vault_id))?;
+    let mut added = 0usize;
+    let mut guard = state.session.lock();
+    let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
+    for row in rows {
+        if session.vault.has_sealed_key(&row.username)? {
+            continue;
+        }
+        session.vault.put_sealed_key(&row)?;
+        added += 1;
+    }
+    drop(guard);
+    Ok(added)
 }
 
 /// Set up (or rotate) the shared sync setup for `vault_id`.
