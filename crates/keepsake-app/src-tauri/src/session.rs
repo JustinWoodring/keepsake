@@ -804,7 +804,7 @@ fn recover_from_sync_blocking(
 
     Ok(keepsake_core::session::Session::new(
         path.to_path_buf(),
-        keepsake_core::vault::Vault::open_or_create(path)?,
+        vault,
         master2,
         username,
     )?)
