@@ -251,7 +251,9 @@ async fn setup_shared_sync(
     passphrase: String,
     server_url: Option<String>,
 ) -> Result<(), String> {
-    session::setup_shared_sync(&state, vault_id, passphrase, server_url)
+    let snapshot = state.clone_state();
+    session::setup_shared_sync(snapshot, vault_id, passphrase, server_url)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -352,7 +354,10 @@ async fn add_user(
     username: String,
     password: String,
 ) -> Result<(), String> {
-    session::add_user(&state, &username, &password).map_err(|e| e.to_string())
+    let snapshot = state.clone_state();
+    session::add_user(snapshot, username, password)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Remove a user from this device.

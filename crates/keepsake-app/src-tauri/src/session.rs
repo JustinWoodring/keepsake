@@ -1,5 +1,7 @@
 //! Bridge between Tauri commands and `keepsake-core`.
 
+use std::sync::Arc;
+
 use uuid::Uuid;
 
 use keepsake_core::audit::AuditOp;
@@ -439,37 +441,59 @@ pub async fn fetch_sealed_keys_rows(
 /// Set up shared sync for `vault_id` on this device and
 /// publish the current user's sealed_keys row to the
 /// server so other devices can join.
-pub fn setup_shared_sync(
+/// Async wrapper for Tauri commands.  The synchronous
+/// `setup_shared_sync` does HTTP I/O via `Handle::block_on`
+/// and would deadlock when called from a tokio worker thread,
+/// so the async version hops to a blocking task first and
+/// releases the session mutex before doing any async work.
+pub async fn setup_shared_sync(
+    state: Arc<AppState>,
+    vault_id: String,
+    passphrase: String,
+    server_url: Option<String>,
+) -> Result<()> {
+    tokio::task::spawn_blocking(move || {
+        setup_shared_sync_blocking(&state, vault_id, passphrase, server_url)
+    })
+    .await
+    .map_err(|e| keepsake_core::Error::Transport(format!("setup join: {e}")))?
+}
+
+/// Blocking implementation of `setup_shared_sync`.  This is
+/// what runs on the `spawn_blocking` thread.
+fn setup_shared_sync_blocking(
     state: &AppState,
     vault_id: String,
     passphrase: String,
     server_url: Option<String>,
 ) -> Result<()> {
-    let mut guard = state.session.lock();
-    let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
-    session.vault.set_shared_sync(
-        &vault_id,
-        &passphrase,
-        server_url.as_deref(),
-    )?;
-    session.refresh_shared_sync_keys()?;
-    let server_url = server_url.clone();
-    let vault_id_for_task = vault_id.clone();
-    let username = session.username.clone();
-    let row = session
-        .vault
-        .get_sealed_key(&username)?
-        .ok_or_else(|| keepsake_core::Error::NotFound(
-            format!("sealed_keys row for '{username}'"),
-        ))?;
-    drop(guard);
+    let row = {
+        let mut guard = state.session.lock();
+        let session = guard.as_mut().ok_or(keepsake_core::Error::Locked)?;
+        session.vault.set_shared_sync(
+            &vault_id,
+            &passphrase,
+            server_url.as_deref(),
+        )?;
+        session.refresh_shared_sync_keys()?;
+        let username = session.username.clone();
+        let row = session
+            .vault
+            .get_sealed_key(&username)?
+            .ok_or_else(|| keepsake_core::Error::NotFound(
+                format!("sealed_keys row for '{username}'"),
+            ))?;
+        // Drop the guard before any HTTP I/O.
+        drop(guard);
+        row
+    };
     if let Some(server_url) = server_url {
-        let rt = tokio::runtime::Handle::current();
         let wire = SealedKeyRowWire::from(row);
+        let rt = tokio::runtime::Handle::current();
         rt.block_on(async move {
             push_sealed_keys_row(
                 &server_url,
-                &vault_id_for_task,
+                &vault_id,
                 &wire,
             )
             .await
@@ -814,7 +838,26 @@ fn recover_from_sync_blocking(
 /// sealed under the new user's master key.  Requires the
 /// vault to be unlocked (so we can re-derive the vault key
 /// from the current user's master).
-pub fn add_user(
+///
+/// Async because the sealed_keys publish step uses HTTP I/O;
+/// the SQLite work + HTTP hop to `spawn_blocking` to avoid
+/// `Handle::block_on` from inside a tokio worker thread.
+pub async fn add_user(
+    state: Arc<AppState>,
+    username: String,
+    password: String,
+) -> Result<()> {
+    tokio::task::spawn_blocking(move || {
+        add_user_blocking(&state, &username, &password)
+    })
+    .await
+    .map_err(|e| keepsake_core::Error::Transport(format!("add_user join: {e}")))?
+}
+
+/// Blocking implementation of `add_user`.  Runs on the
+/// `spawn_blocking` thread; the HTTP publish hop uses
+/// `Handle::block_on` because it's safe off the tokio worker.
+fn add_user_blocking(
     state: &AppState,
     username: &str,
     password: &str,
@@ -870,22 +913,32 @@ pub fn add_user(
         Some(username),
         None,
     )?;
+    // Snapshot the publish inputs while we still hold the
+    // lock, then drop the lock before doing HTTP I/O.
+    let publish_target = s.vault
+        .get_shared_sync_vault_id()?
+        .and_then(|vid| {
+            s.vault.get_shared_sync(&vid).ok().flatten().and_then(
+                |setup| setup.server_url.map(|url| (vid, url)),
+            )
+        });
+    let row_for_upload = SealedKeyRowWire::from(row.clone());
+    drop(guard);
+
     // Publish the new user's row to the server so other
-    // devices in the sync group can recover them.
-    if let Some(vault_id) = s.vault.get_shared_sync_vault_id()? {
-        if let Some(setup) = s.vault.get_shared_sync(&vault_id)? {
-            if let Some(server_url) = setup.server_url {
-                let row_for_upload = SealedKeyRowWire::from(row.clone());
-                let _ = tokio::runtime::Handle::current().block_on(async move {
-                    let _ = push_sealed_keys_row(
-                        &server_url,
-                        &vault_id,
-                        &row_for_upload,
-                    )
-                    .await;
-                });
-            }
-        }
+    // devices in the sync group can recover them.  This is
+    // HTTP I/O, so hop to `Handle::block_on` from this
+    // blocking thread (safe here).
+    if let Some((vault_id, server_url)) = publish_target {
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async move {
+            let _ = push_sealed_keys_row(
+                &server_url,
+                &vault_id,
+                &row_for_upload,
+            )
+            .await;
+        });
     }
     Ok(())
 }
