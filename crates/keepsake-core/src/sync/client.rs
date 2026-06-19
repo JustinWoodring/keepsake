@@ -113,6 +113,26 @@ impl SyncClient {
                         h.id
                     )))?;
                 let payload = wrap_envelope(shared_key, &aead_nonce, &aead_aad, &ciphertext)?;
+                let sk_fingerprint = {
+                    let mut h = blake3::Hasher::new();
+                    h.update(b"diag/shared-key/v1\n");
+                    h.update(shared_key.as_bytes());
+                    let d = h.finalize();
+                    hex::encode(&d.as_bytes()[..8])
+                };
+                let payload_fingerprint = {
+                    let mut h = blake3::Hasher::new();
+                    h.update(&payload);
+                    let d = h.finalize();
+                    hex::encode(&d.as_bytes()[..8])
+                };
+                eprintln!(
+                    "[client.push] record={rid} sk={skfp} payload={pfp} vault_id={vid}",
+                    rid = h.id,
+                    skfp = sk_fingerprint,
+                    pfp = payload_fingerprint,
+                    vid = self.vault_id,
+                );
                 lamport += 1;
                 let ch = Change {
                     id: Uuid::new_v4(),
@@ -303,6 +323,31 @@ fn apply_remote_change(shared_key: &AeadKey, session: &mut Session, ch: &Change)
     let record_id = ch.record_id.ok_or_else(|| {
         Error::Sync("change has no record_id; only record changes are supported in v1".into())
     })?;
+    let sk_fingerprint = {
+        let mut h = blake3::Hasher::new();
+        h.update(b"diag/shared-key/v1\n");
+        h.update(shared_key.as_bytes());
+        let d = h.finalize();
+        hex::encode(&d.as_bytes()[..8])
+    };
+    let payload_fingerprint = {
+        let mut h = blake3::Hasher::new();
+        h.update(&ch.payload);
+        let d = h.finalize();
+        hex::encode(&d.as_bytes()[..8])
+    };
+    let vault_id = session
+        .shared_sync_keys
+        .keys()
+        .next()
+        .cloned()
+        .unwrap_or_default();
+    eprintln!(
+        "[apply_remote_change] record={record_id} sk={sk_fp} payload={pfp} vault_id={vid:?}",
+        sk_fp = sk_fingerprint,
+        pfp = payload_fingerprint,
+        vid = vault_id,
+    );
     let (aead_nonce, aead_aad, ciphertext) = match unwrap_envelope(shared_key, &ch.payload) {
         Ok(t) => t,
         Err(e) => {
